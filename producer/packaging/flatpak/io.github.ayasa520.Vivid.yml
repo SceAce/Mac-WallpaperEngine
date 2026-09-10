@@ -1,0 +1,130 @@
+# @VIVID_TEMPLATE_COMMENT_BEGIN@
+# Template consumed by tools/producer/flatpak/build.sh and prefetch_sources.sh.
+#
+# Do not pass this file directly to flatpak-builder. The wrapper scripts render
+# a concrete manifest under .build with the GitHub source pinned to an exact
+# commit, plus absolute paths and hashes for local packaging archives.
+# @VIVID_TEMPLATE_COMMENT_END@
+app-id: io.github.ayasa520.Vivid
+runtime: org.gnome.Platform
+runtime-version: "49"
+sdk: org.gnome.Sdk
+command: vivid
+
+finish-args:
+  - --share=ipc
+  - --share=network
+  - --socket=wayland
+  - --socket=pulseaudio
+  - --device=dri
+  - --filesystem=host:ro
+  - --filesystem=xdg-run/vivid:create
+  - --env=GI_TYPELIB_PATH=/app/lib/girepository-1.0
+  - --env=LD_LIBRARY_PATH=/app/lib:/app/lib64
+
+build-options:
+  append-path: /app/bin
+  env:
+    GI_TYPELIB_PATH: /app/lib/girepository-1.0
+    LD_LIBRARY_PATH: /app/lib:/app/lib64
+    PKG_CONFIG_PATH: /app/lib64/pkgconfig:/app/lib/pkgconfig
+
+modules:
+  - name: unifdef
+    buildsystem: simple
+    build-commands:
+      - make CFLAGS="${VIVID_UNIFDEF_CFLAGS:--O2 -g -std=gnu17}"
+      - install -Dm755 unifdef "${VIVID_INSTALL_PREFIX:-/app}/bin/unifdef"
+    sources:
+      - type: archive
+        url: https://dotat.at/prog/unifdef/unifdef-2.12.tar.xz
+        # dotat.at is a single personal host and has dropped connections during
+        # release builds. The Fedora lookaside serves the identical upstream
+        # tarball (same sha256) from a CDN, so keep it as a fallback.
+        mirror-urls:
+          - https://src.fedoraproject.org/repo/pkgs/unifdef/unifdef-2.12.tar.xz/sha512/df78cf931989b5e604e68e0bf00490782d385a575b51584e4be44535b6bde5f9e2abff14510f8f426670d9f6f1abfb5768da5e108bdefd6c9d0c8356a05164b5/unifdef-2.12.tar.xz
+        sha256: 43ce0f02ecdcdc723b2475575563ddb192e988c886d368260bc0a63aee3ac400
+
+  - name: vivid-producer
+    buildsystem: simple
+    build-options:
+      build-args:
+        - "--filesystem=@NATIVE_BUILD_ROOT@"
+      env:
+        VIVID_FLATPAK_RENDERER_BUILD_ROOT: "@NATIVE_BUILD_ROOT@"
+        VIVID_FLATPAK_APP_VERSION: "@APP_VERSION@"
+        VIVID_FLATPAK_RELEASE_DATE: "@RELEASE_DATE@"
+    build-commands:
+      - sh tools/producer/install_renderers.sh
+      - sh tools/producer/install_webui.sh
+      - sh tools/producer/install_producer_app.sh
+      # Flatpak/AppStream reads the visible application version from the
+      # installed metainfo release entry. Keep this in the local packaging
+      # manifest so a packaging-only version bump does not require the GitHub
+      # source commit itself to already contain the same release metadata.
+      - |
+        python3 - <<'PY'
+        import os
+        import pathlib
+        import re
+        import sys
+        import xml.etree.ElementTree as ET
+
+        app_id = "io.github.ayasa520.Vivid"
+        version = os.environ["VIVID_FLATPAK_APP_VERSION"]
+        release_date = os.environ["VIVID_FLATPAK_RELEASE_DATE"]
+
+        if not re.fullmatch(r"[0-9A-Za-z._+~-]+", version):
+            sys.exit(
+                "Invalid VIVID_FLATPAK_APP_VERSION="
+                f"{version}; expected only 0-9, A-Z, a-z, '.', '_', '+', '~', or '-'."
+            )
+        if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", release_date):
+            sys.exit(
+                "Invalid VIVID_FLATPAK_RELEASE_DATE="
+                f"{release_date}; expected YYYY-MM-DD."
+            )
+
+        metainfo = pathlib.Path(f"/app/share/metainfo/{app_id}.metainfo.xml")
+        tree = ET.parse(metainfo)
+        root = tree.getroot()
+
+        releases = root.find("releases")
+        if releases is None:
+            releases = ET.SubElement(root, "releases")
+
+        release = releases.find("release")
+        if release is None:
+            release = ET.Element("release")
+            releases.insert(0, release)
+
+        release.set("version", version)
+        release.set("date", release_date)
+
+        description = release.find("description")
+        if description is None:
+            description = ET.SubElement(release, "description")
+        if description.find("p") is None:
+            paragraph = ET.SubElement(description, "p")
+            paragraph.text = "Flatpak package release."
+
+        ET.indent(tree, space="  ")
+        tree.write(metainfo, encoding="UTF-8", xml_declaration=True)
+        PY
+    sources:
+      # Use the public GitHub repository as the cacheable, reproducible Vivid
+      # source. Submodules are intentionally left enabled so the renderer tree
+      # is checked out with the commit recorded by this repository.
+      - type: git
+        url: "@SOURCE_GIT_URL@"
+        branch: "@SOURCE_GIT_BRANCH@"
+        commit: "@SOURCE_GIT_COMMIT@"
+      # The CEF binary bundle is large and is maintained as an explicit local
+      # packaging input. Let flatpak-builder verify and extract it like any
+      # other archive source so the build script does not manage a parallel CEF
+      # extraction cache outside the module source tree.
+      - type: archive
+        path: "@CEF_ARCHIVE@"
+        sha256: "@CEF_ARCHIVE_SHA256@"
+        dest: producer/packaging/flatpak/cef
+        strip-components: 1
