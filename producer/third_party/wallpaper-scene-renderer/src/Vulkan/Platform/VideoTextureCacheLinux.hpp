@@ -1,0 +1,55 @@
+#pragma once
+#include "VideoTextureCache.hpp"
+
+typedef struct _GstSample GstSample;
+
+namespace wallpaper::vulkan
+{
+class LinuxVideoTextureCache : public VideoTextureCache {
+public:
+    LinuxVideoTextureCache(const Device&, VideoTextureDecoderSettings settings = {});
+    ~LinuxVideoTextureCache();
+
+    ImageSlotsRef
+         Acquire(std::string_view          key, const SceneTexture&, const Image&,
+                 VideoTexturePlaybackState initial_state = VideoTexturePlaybackState::Playing);
+    void ApplyPlaybackStates(const std::unordered_map<std::string, bool>&   paused_by_key,
+                             const std::unordered_set<std::string>&         stopped_keys,
+                             const std::unordered_map<std::string, double>& rates_by_key);
+    void SetGlobalPaused(bool paused);
+    void ApplySeekRequests(std::unordered_map<std::string, double>& seek_seconds_by_key);
+    void Poll();
+    void PublishRuntimeStates(std::unordered_map<std::string, VideoTextureRuntimeState>& states,
+                              const std::unordered_set<std::string>& requested_keys);
+    void RecordUploads(vvk::CommandBuffer&);
+    void Clear();
+    bool Release(std::string_view key);
+    std::size_t GetTrackedBytes() const;
+    std::size_t GetTrackedEntryCount() const;
+
+private:
+    struct Entry;
+
+    Entry*       find(std::string_view key);
+    const Entry* find(std::string_view key) const;
+    void         allocateCmd();
+    bool         startPipeline(Entry&);
+    void         stopPipeline(Entry&);
+    bool         restartPipeline(Entry&);
+    bool         loopPipeline(Entry&);
+    bool         applyPipelinePlaybackState(Entry&);
+    bool         setPaused(Entry&, bool paused);
+    bool         stopPlayback(Entry&);
+    bool         setPlaybackRate(Entry&, double rate);
+    bool         seekTo(Entry&, double seconds);
+    bool         uploadSample(Entry&, ::GstSample*);
+
+    const Device&                       m_device;
+    VideoTextureDecoderSettings         m_settings;
+    vvk::CommandBuffers                 m_cmds;
+    vvk::CommandBuffer                  m_cmd;
+    std::vector<std::unique_ptr<Entry>> m_entries;
+    bool                                m_globally_paused { false };
+};
+
+} // namespace wallpaper::vulkan

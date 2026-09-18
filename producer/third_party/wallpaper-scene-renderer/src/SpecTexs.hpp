@@ -1,0 +1,144 @@
+#pragma once
+#include <string_view>
+#include <cstdint>
+#include "Core/Literals.hpp"
+#include "Core/StringHelper.hpp"
+#include "Utils/String.h"
+
+namespace wallpaper
+{
+
+#define BASE_GLTEX_NAMES(ext)                                                                      \
+    "g_Texture0" #ext, "g_Texture1" #ext, "g_Texture2" #ext, "g_Texture3" #ext, "g_Texture4" #ext, \
+        "g_Texture5" #ext, "g_Texture6" #ext, "g_Texture7" #ext, "g_Texture8" #ext,                \
+        "g_Texture9" #ext, "g_Texture10" #ext, "g_Texture11" #ext, "g_Texture12" #ext
+
+constexpr std::array WE_GLTEX_NAMES { BASE_GLTEX_NAMES() };
+constexpr std::array WE_GLTEX_RESOLUTION_NAMES { BASE_GLTEX_NAMES(Resolution) };
+constexpr std::array WE_GLTEX_TEXEL_NAMES { BASE_GLTEX_NAMES(Texel) };
+constexpr std::array WE_GLTEX_ROTATION_NAMES { BASE_GLTEX_NAMES(Rotation) };
+constexpr std::array WE_GLTEX_TRANSLATION_NAMES { BASE_GLTEX_NAMES(Translation) };
+constexpr std::array WE_GLTEX_MIPMAPINFO_NAMES { BASE_GLTEX_NAMES(MipMapInfo) };
+#undef BASE_GLTEX_NAMES
+
+constexpr std::string_view WE_SPEC_PREFIX { "_rt_" };
+constexpr std::string_view WE_IMAGE_LAYER_COMPOSITE_PREFIX { "_rt_imageLayerComposite_" };
+constexpr std::string_view WE_HALF_COMPO_BUFFER_PREFIX { "_rt_HalfCompoBuffer" };
+constexpr std::string_view WE_QUARTER_COMPO_BUFFER_PREFIX { "_rt_QuarterCompoBuffer" };
+constexpr std::string_view WE_FULL_COMPO_BUFFER_PREFIX { "_rt_FullCompoBuffer" };
+constexpr std::string_view WE_MIP_MAPPED_FRAME_BUFFER { "_rt_MipMappedFrameBuffer" };
+
+constexpr std::string_view WE_EFFECT_PPONG_PREFIX { "_rt_effect_pingpong_" };
+constexpr std::string_view WE_EFFECT_PPONG_PREFIX_A { "_rt_effect_pingpong_a_" };
+constexpr std::string_view WE_EFFECT_PPONG_PREFIX_B { "_rt_effect_pingpong_b_" };
+
+constexpr std::string_view WE_IN_POSITION { "a_Position" };
+constexpr std::string_view WE_IN_NORMAL { "a_Normal" };
+constexpr std::string_view WE_IN_TANGENT4 { "a_Tangent4" };
+constexpr std::string_view WE_IN_TEXCOORD { "a_TexCoord" };
+constexpr std::string_view WE_IN_BLENDINDICES { "a_BlendIndices" };
+constexpr std::string_view WE_IN_BLENDWEIGHTS { "a_BlendWeights" };
+
+// particle
+
+constexpr std::string_view WE_IN_POSITIONVEC4 { "a_PositionVec4" };
+constexpr std::string_view WE_IN_COLOR { "a_Color" };
+constexpr std::string_view WE_IN_TEXCOORDVEC4 { "a_TexCoordVec4" };
+constexpr std::string_view WE_IN_TEXCOORDVEC4C1 { "a_TexCoordVec4C1" };
+constexpr std::string_view WE_IN_TEXCOORDVEC4C2 { "a_TexCoordVec4C2" };
+constexpr std::string_view WE_IN_TEXCOORDVEC4C3 { "a_TexCoordVec4C3" };
+constexpr std::string_view WE_IN_TEXCOORDVEC3C2 { "a_TexCoordVec3C2" };
+constexpr std::string_view WE_IN_TEXCOORDC2 { "a_TexCoordC2" };
+
+constexpr std::string_view G_M { "g_ModelMatrix" };
+constexpr std::string_view G_VP { "g_ViewProjectionMatrix" };
+constexpr std::string_view G_MVP { "g_ModelViewProjectionMatrix" };
+constexpr std::string_view G_LMM { "g_LayerModelMatrix" };
+constexpr std::string_view G_EMVP { "g_EffectModelViewProjectionMatrix" };
+constexpr std::string_view G_AM { "g_AltModelMatrix" };
+constexpr std::string_view G_MI { "g_ModelMatrixInverse" };
+constexpr std::string_view G_MVPI { "g_ModelViewProjectionMatrixInverse" };
+constexpr std::string_view G_ETVP { "g_EffectTextureProjectionMatrix" };
+constexpr std::string_view G_ETVPI { "g_EffectTextureProjectionMatrixInverse" };
+constexpr std::string_view G_LP { "g_LightsPosition" };
+constexpr std::string_view G_LCP { "g_LightsColorPremultiplied" };
+// First-party 3D model shaders read this separate color/radius payload instead of the older
+// premultiplied light vector used by existing 2D shaders, so the updater gates it to model nodes.
+constexpr std::string_view G_LCR { "g_LightsColorRadius" };
+constexpr std::string_view G_LPOINT_ORIGIN { "g_LPoint_Origin" };
+constexpr std::string_view G_LPOINT_COLOR { "g_LPoint_Color" };
+constexpr std::string_view G_LSPOT_ORIGIN { "g_LSpot_Origin" };
+constexpr std::string_view G_LSPOT_COLOR { "g_LSpot_Color" };
+constexpr std::string_view G_LSPOT_DIRECTION { "g_LSpot_Direction" };
+constexpr std::string_view G_LSPOT_EXPONENT { "g_LSpot_Exponent" };
+constexpr std::string_view G_LDIR_COLOR { "g_LDirectional_Color" };
+constexpr std::string_view G_LDIR_DIRECTION { "g_LDirectional_Direction" };
+constexpr std::string_view G_LTUBE_ORIGINA { "g_LTube_OriginA" };
+constexpr std::string_view G_LTUBE_ORIGINB { "g_LTube_OriginB" };
+constexpr std::string_view G_LTUBE_COLOR { "g_LTube_Color" };
+constexpr std::string_view G_LFEAT_SHADOW_POINT_PROJ { "g_LFeature_ShadowPointProjection" };
+constexpr std::string_view G_LFEAT_SHADOW_POINT_XFORM {
+    "g_LFeature_ShadowPointProjectionTransform"
+};
+constexpr std::string_view G_LFEAT_SHADOW_PROJ { "g_LFeature_ShadowProjection" };
+constexpr std::string_view G_LFEAT_SHADOW_PROJ_XFORM { "g_LFeature_ShadowProjectionTransform" };
+constexpr std::string_view G_EYE_POSITION { "g_EyePosition" };
+constexpr std::string_view G_NORMAL_MODEL_MATRIX { "g_NormalModelMatrix" };
+// These camera basis vectors are seeded and updated only for the model-only perspective camera;
+// keeping them named here avoids ad-hoc string literals without expanding the legacy 2D contract.
+constexpr std::string_view G_VIEWUP { "g_ViewUp" };
+constexpr std::string_view G_VIEWRIGHT { "g_ViewRight" };
+constexpr std::string_view G_VIEWFORWARD { "g_ViewForward" };
+
+constexpr std::string_view G_TIME { "g_Time" };
+constexpr std::string_view G_DAYTIME { "g_DayTime" };
+// Wallpaper Engine feedback effects integrate their simulations with the current frame delta and
+// cursor history. Keep these global uniform names centralized so the parser and updater share the
+// same authored runtime contract instead of relying on ad-hoc string literals in effect fixes.
+constexpr std::string_view G_FRAMETIME { "g_Frametime" };
+constexpr std::string_view G_POINTERPOSITION { "g_PointerPosition" };
+constexpr std::string_view G_POINTERPOSITIONLAST { "g_PointerPositionLast" };
+constexpr std::string_view G_POINTERSTATE { "g_PointerState" };
+constexpr std::string_view G_TEXELSIZE { "g_TexelSize" };
+constexpr std::string_view G_TEXELSIZEHALF { "g_TexelSizeHalf" };
+constexpr std::string_view G_BONES { "g_Bones" };
+constexpr std::string_view G_SCREEN { "g_Screen" };
+constexpr std::string_view G_PARALLAXPOSITION { "g_ParallaxPosition" };
+
+constexpr std::string_view G_AVP { "g_AltViewProjectionMatrix" };
+constexpr std::string_view G_EM { "g_EffectModelMatrix" };
+constexpr std::string_view G_RV0 { "g_RenderVar0" };
+constexpr std::string_view G_RV1 { "g_RenderVar1" };
+constexpr std::string_view G_RV2 { "g_RenderVar2" };
+constexpr std::string_view G_RV3 { "g_RenderVar3" };
+constexpr std::string_view G_RV4 { "g_RenderVar4" };
+
+constexpr std::string_view SpecTex_Default { "_rt_default" };
+// Multisampled compose color. Scene geometry writes this when MSAA is on, then
+// one resolve copies it into `_rt_default` for sampling, bloom, and present.
+constexpr std::string_view SpecTex_DefaultMS { "_rt_FullFrameBufferMultiSampled" };
+constexpr std::string_view SpecTex_VolumetricsBack { "_rt_volumetricsBack" };
+constexpr std::string_view SpecTex_VolumetricsSingle { "_rt_volumetricsSingle" };
+constexpr std::string_view SpecTex_VolumetricsLightBuffer { "_rt_volumetricsLightBuffer" };
+constexpr std::string_view SpecTex_VolumetricsLightBufferB { "_rt_volumetricsLightBufferB" };
+constexpr std::string_view SpecTex_ShadowAtlas { "_rt_shadowAtlas" };
+// Official model-reflection target. Receivers sample this RT; reflected producers write it.
+constexpr std::string_view SpecTex_Reflection { "_rt_Reflection" };
+// Second physical compose image. Shader color-blend and refraction sample this snapshot while
+// writing `_rt_default`, instead of allocating a unique `_rt_default_<version>_copy` for every
+// self-write.
+constexpr std::string_view SpecTex_DefaultPingPong { "_rt_default_pingpong" };
+constexpr std::string_view SpecTex_Link { "_rt_link_" };
+
+inline bool IsSpecTex(const std::string_view name) { return sstart_with(name, WE_SPEC_PREFIX); }
+inline bool IsSpecLinkTex(const std::string_view name) { return sstart_with(name, SpecTex_Link); }
+inline uint32_t ParseLinkTex(const std::string_view name) {
+    std::string sid { name };
+    sid = sid.substr(9);
+    uint32_t result { 0 };
+    STRTONUM(sid, result);
+    return result;
+}
+inline std::string GenLinkTex(idx id) { return std::string(SpecTex_Link) + std::to_string(id); }
+
+} // namespace wallpaper

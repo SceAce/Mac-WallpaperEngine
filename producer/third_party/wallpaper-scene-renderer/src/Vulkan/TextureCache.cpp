@@ -1,0 +1,1146 @@
+
+#include "Shader.hpp"
+#include "Swapchain.hpp"
+#include "TextureCache.hpp"
+#include "Device.hpp"
+#include "Util.hpp"
+
+#include "Image.hpp"
+#include "Core/MapSet.hpp"
+#include "Core/ArrayHelper.hpp"
+#include "Utils/AutoDeletor.hpp"
+#include "Utils/Hash.h"
+#include "include/Vulkan/Parameters.hpp"
+#include "vvk/vulkan_wrapper.hpp"
+
+#include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <cstring>
+#include <limits>
+#include <optional>
+
+using namespace wallpaper;
+using namespace wallpaper::vulkan;
+
+namespace wallpaper
+{
+namespace vulkan
+{
+TextureCache::ImageCacheRevision TextureCache::CacheRevisionFor(const Image& image) {
+    return { image.revision, image.textureResolutionEpoch };
+}
+
+VkFormat ToVkType(TextureFormat tf) {
+    switch (tf) {
+    case TextureFormat::BC1: return VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
+    case TextureFormat::BC2: return VK_FORMAT_BC2_UNORM_BLOCK;
+    case TextureFormat::BC3: return VK_FORMAT_BC3_UNORM_BLOCK;
+    case TextureFormat::R8: return VK_FORMAT_R8_UNORM;
+    case TextureFormat::RG8: return VK_FORMAT_R8G8_UNORM;
+    case TextureFormat::RGB8: return VK_FORMAT_R8G8B8_UNORM;
+    case TextureFormat::RGBA8: return VK_FORMAT_R8G8B8A8_UNORM;
+    default: assert(false); return VK_FORMAT_R8G8B8A8_UNORM;
+    }
+}
+
+VkSamplerAddressMode ToVkType(wallpaper::TextureWrap sam) {
+    using namespace wallpaper;
+    switch (sam) {
+    case TextureWrap::CLAMP_TO_EDGE: return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    case TextureWrap::REPEAT:
+    default: return VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    }
+}
+VkFilter ToVkType(wallpaper::TextureFilter sam) {
+    using namespace wallpaper;
+    switch (sam) {
+    case TextureFilter::LINEAR: return VK_FILTER_LINEAR;
+    case TextureFilter::NEAREST:
+    default: return VK_FILTER_NEAREST;
+    }
+}
+} // namespace vulkan
+} // namespace wallpaper
+
+namespace
+{
+VkSamplerCreateInfo GenSamplerInfo(TextureKey key) {
+    auto& sam = key.sample;
+    const float max_lod = key.mipmap_level > 0
+        ? static_cast<float>(key.mipmap_level - 1)
+        : 0.0f;
+
+    const bool compare = key.usage == TexUsage::DEPTH;
+    VkSamplerCreateInfo sampler_info { .sType            = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+                                       .pNext            = nullptr,
+                                       .magFilter        = ToVkType(sam.magFilter),
+                                       .minFilter        = (ToVkType(sam.minFilter)),
+                                       .mipmapMode       = sam.minFilter == TextureFilter::NEAREST
+                                           ? VK_SAMPLER_MIPMAP_MODE_NEAREST
+                                           : VK_SAMPLER_MIPMAP_MODE_LINEAR,
+                                       .addressModeU     = (ToVkType(sam.wrapS)),
+                                       .addressModeV     = (ToVkType(sam.wrapT)),
+                                       .addressModeW     = (ToVkType(sam.wrapT)),
+                                       .anisotropyEnable = (false),
+                                       .maxAnisotropy    = (1.0f),
+                                       // Shadow atlases hold reversed depth (near = 1): a receiver
+                                       // is lit when its light-space depth is GREATER than the
+                                       // stored caster depth.
+                                       .compareEnable    = compare,
+                                       .compareOp        = compare ? VK_COMPARE_OP_GREATER
+                                                                   : VK_COMPARE_OP_NEVER,
+                                       .minLod           = (0.0f),
+                                       .maxLod           = max_lod,
+                                       .borderColor      = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+                                       .unnormalizedCoordinates = (false) };
+    return sampler_info;
+}
+
+void RecordClearNewRenderTargetToTransparentBlack(vvk::CommandBuffer& cmd,
+                                                  const ImageParameters& image) {
+    VkImageSubresourceRange subresourceRange {
+        .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+        .baseMipLevel   = 0,
+        .levelCount     = VK_REMAINING_MIP_LEVELS,
+        .baseArrayLayer = 0,
+        .layerCount     = VK_REMAINING_ARRAY_LAYERS,
+    };
+    {
+        VkImageMemoryBarrier to_transfer {
+            .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext            = nullptr,
+            .srcAccessMask    = 0,
+            .dstAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .oldLayout        = VK_IMAGE_LAYOUT_UNDEFINED,
+            .newLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .image            = image.handle,
+            .subresourceRange = subresourceRange,
+        };
+        cmd.PipelineBarrier(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                            VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            VK_DEPENDENCY_BY_REGION_BIT,
+                            to_transfer);
+    }
+
+    const VkClearColorValue transparent_black { .float32 = { 0.0f, 0.0f, 0.0f, 0.0f } };
+    cmd.ClearColorImage(image.handle,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        &transparent_black,
+                        subresourceRange);
+
+    {
+        const bool msaa = image.samples > 1;
+        VkImageMemoryBarrier after_clear {
+            .sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext         = nullptr,
+            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .dstAccessMask = static_cast<VkAccessFlags>(
+                msaa ? (VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT)
+                     : VK_ACCESS_SHADER_READ_BIT),
+            .oldLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .newLayout        = msaa ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+                                     : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .image            = image.handle,
+            .subresourceRange = subresourceRange,
+        };
+        cmd.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            msaa ? VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+                                 : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                            VK_DEPENDENCY_BY_REGION_BIT,
+                            after_clear);
+    }
+}
+
+std::size_t ImageAllocationBytes(const VmaImageParameters& image) {
+    return image.handle ? static_cast<std::size_t>(image.handle.AllocationSize()) : 0u;
+}
+
+std::size_t ImageSlotsAllocationBytes(const ImageSlots& slots) {
+    std::size_t total = 0;
+    for (const auto& image : slots.slots) {
+        total += ImageAllocationBytes(image);
+    }
+    return total;
+}
+
+std::size_t ImageMipmapUploadBytes(const ImageData& mipmap) {
+    if (mipmap.size > 0) {
+        return static_cast<std::size_t>(mipmap.size);
+    }
+    return static_cast<std::size_t>(std::max(mipmap.width, 0)) *
+           static_cast<std::size_t>(std::max(mipmap.height, 0)) * 4u;
+}
+
+std::size_t ImageSlotUploadBytes(const Image::Slot& slot) {
+    std::size_t total = 0;
+    for (const auto& mipmap : slot.mipmaps) {
+        total += ImageMipmapUploadBytes(mipmap);
+    }
+    return total;
+}
+
+bool TextureSlotsResident(const ImageSlots& slots) {
+    if (slots.slots.empty()) return false;
+    for (const auto& slot : slots.slots) {
+        if (!slot.handle || !slot.view || !slot.sampler) return false;
+    }
+    return true;
+}
+
+inline std::optional<VmaImageParameters>
+CreateImage(const Device& device, VkExtent3D extent, u32 miplevel, VkFormat format,
+            VkSamplerCreateInfo sampler_info, VkImageUsageFlags usage,
+            VmaMemoryUsage mem_usage = VMA_MEMORY_USAGE_GPU_ONLY,
+            VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT,
+            VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT) {
+    VmaImageParameters image;
+    do {
+        const u32 mip_levels = samples > VK_SAMPLE_COUNT_1_BIT ? 1u : miplevel;
+        VkImageCreateInfo info {
+            .sType                 = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .pNext                 = nullptr,
+            .imageType             = VK_IMAGE_TYPE_2D,
+            .format                = format,
+            .extent                = extent,
+            .mipLevels             = mip_levels,
+            .arrayLayers           = 1,
+            .samples               = samples,
+            .tiling                = VK_IMAGE_TILING_OPTIMAL,
+            .usage                 = usage,
+            .sharingMode           = VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .initialLayout         = VK_IMAGE_LAYOUT_UNDEFINED,
+        };
+        image.extent = info.extent;
+        image.samples = static_cast<uint>(samples);
+        VmaAllocationCreateInfo vma_info {};
+        vma_info.usage = mem_usage;
+        VVK_CHECK_ACT(break,
+                      vvk::CreateImage(device.vma_allocator(), info, vma_info, image.handle));
+
+        image.mipmap_level = mip_levels;
+        {
+            VkImageViewCreateInfo createinfo {
+                .sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                .pNext    = nullptr,
+                .image    = *image.handle,
+                .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                .format   = format,
+                .subresourceRange =
+                    VkImageSubresourceRange {
+                        .aspectMask     = aspect,
+                        .baseMipLevel   = 0,
+                        .levelCount     = mip_levels,
+                        .baseArrayLayer = 0,
+                        .layerCount     = 1,
+                    },
+            };
+            VVK_CHECK_ACT(break, device.handle().CreateImageView(createinfo, image.view));
+        }
+        VVK_CHECK_ACT(break, device.handle().CreateSampler(sampler_info, image.sampler));
+        return image;
+    } while (false);
+    /*
+    if (result != vk::Result::eSuccess) {
+        device.DestroyImageParameters(image);
+    }
+    */
+    return std::nullopt;
+}
+
+inline void RecordCopyImageData(std::span<const BufferParameters> in_bufs,
+                                std::span<const VkExtent3D> in_exts,
+                                vvk::CommandBuffer& cmd, const ImageParameters& image,
+                                VkImageLayout old_layout) {
+    VkImageSubresourceRange subresourceRange {
+        .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+        .baseMipLevel   = 0,
+        .levelCount     = (uint32_t)in_bufs.size(),
+        .baseArrayLayer = 0,
+        .layerCount     = 1,
+    };
+    {
+        VkImageMemoryBarrier in_bar {
+            .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext            = nullptr,
+            .srcAccessMask    = VK_ACCESS_MEMORY_WRITE_BIT,
+            .dstAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .oldLayout        = old_layout,
+            .newLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .image            = image.handle,
+            .subresourceRange = subresourceRange,
+        };
+        cmd.PipelineBarrier(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                            VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            VK_DEPENDENCY_BY_REGION_BIT,
+                            in_bar);
+    }
+    VkBufferImageCopy copy {
+        .imageSubresource =
+            VkImageSubresourceLayers {
+                .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseArrayLayer = 0,
+                .layerCount     = 1,
+            },
+    };
+    for (usize i = 0; i < in_bufs.size(); i++) {
+        copy.imageSubresource.mipLevel = (u32)i;
+        copy.imageExtent               = in_exts[i];
+        cmd.CopyBufferToImage(
+            in_bufs[i].handle, image.handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, copy);
+    }
+    {
+        VkImageMemoryBarrier out_bar {
+            .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext            = nullptr,
+            .srcAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .dstAccessMask    = VK_ACCESS_SHADER_READ_BIT,
+            .oldLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .newLayout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .image            = image.handle,
+            .subresourceRange = subresourceRange,
+        };
+        cmd.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                            VK_DEPENDENCY_BY_REGION_BIT,
+                            out_bar);
+    }
+}
+
+bool CanReuseTextureSlots(const ImageSlots& existing, const Image& image) {
+    if (existing.slots.size() != image.slots.size()) return false;
+
+    for (usize i = 0; i < image.slots.size(); i++) {
+        const auto& cached_slot = existing.slots[i];
+        const auto& next_slot = image.slots[i];
+        if (cached_slot.extent.width != static_cast<uint32_t>(next_slot.width) ||
+            cached_slot.extent.height != static_cast<uint32_t>(next_slot.height) ||
+            cached_slot.mipmap_level != next_slot.mipmaps.size()) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+std::optional<TextureCachePendingImageUpload>
+BuildImageUploadJob(const Device& device, std::string_view key, const Image& image,
+                    const ImageSlots& slots, usize slot_index, VkImageLayout old_layout) {
+    if (slot_index >= image.slots.size() || slot_index >= slots.slots.size()) return std::nullopt;
+
+    const auto& image_slot = image.slots[slot_index];
+    const auto& gpu_slot   = slots.slots[slot_index];
+    TextureCachePendingImageUpload upload;
+    upload.key        = std::string(key);
+    upload.image      = ImageParameters(gpu_slot);
+    upload.old_layout = old_layout;
+    upload.stage_bufs.reserve(image_slot.mipmaps.size());
+    upload.extents.reserve(image_slot.mipmaps.size());
+
+    for (const auto& mipmap : image_slot.mipmaps) {
+        VmaBufferParameters buf;
+        if (!CreateStagingBuffer(device.vma_allocator(), static_cast<u32>(mipmap.size), buf)) {
+            return std::nullopt;
+        }
+        void* mapped = nullptr;
+        VVK_CHECK_ACT(return std::nullopt, buf.handle.MapMemory(&mapped));
+        memcpy(mapped, mipmap.data.get(), static_cast<u32>(mipmap.size));
+        buf.handle.UnMapMemory();
+        upload.stage_bufs.emplace_back(std::move(buf));
+        upload.extents.push_back(VkExtent3D {
+            static_cast<u32>(mipmap.width),
+            static_cast<u32>(mipmap.height),
+            1,
+        });
+    }
+
+    return upload;
+}
+
+bool QueueImageDataUploads(const Device& device, std::string_view key, const Image& image,
+                           const ImageSlots& slots, VkImageLayout old_layout,
+                           std::vector<TextureCachePendingImageUpload>& pending_uploads) {
+    std::vector<TextureCachePendingImageUpload> queued_uploads;
+    queued_uploads.reserve(image.slots.size());
+    for (usize i = 0; i < image.slots.size(); i++) {
+        auto upload = BuildImageUploadJob(device, key, image, slots, i, old_layout);
+        if (!upload.has_value()) {
+            return false;
+        }
+        queued_uploads.emplace_back(std::move(upload.value()));
+    }
+
+    for (auto& upload : queued_uploads) {
+        pending_uploads.emplace_back(std::move(upload));
+    }
+
+    return true;
+}
+
+bool CreateImageSlotForTexture(const Device& device, const Image& image, usize slot_index,
+                               VmaImageParameters& image_paras) {
+    if (slot_index >= image.slots.size()) return false;
+
+    const auto& sam = image.header.sample;
+    const auto& image_slot = image.slots[slot_index];
+    const auto  mipmap_levels = image_slot.mipmaps.size();
+
+    if (image_slot.width <= 0 || image_slot.height <= 0 || image_slot.mipmaps.empty()) {
+        return false;
+    }
+    const float max_lod = mipmap_levels > 0
+        ? static_cast<float>(mipmap_levels - 1)
+        : 0.0f;
+    VkSamplerCreateInfo sampler_info {
+        .sType                   = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .pNext                   = nullptr,
+        .magFilter               = ToVkType(sam.magFilter),
+        .minFilter               = (ToVkType(sam.minFilter)),
+        .mipmapMode              = sam.minFilter == TextureFilter::NEAREST
+            ? VK_SAMPLER_MIPMAP_MODE_NEAREST
+            : VK_SAMPLER_MIPMAP_MODE_LINEAR,
+        .addressModeU            = (ToVkType(sam.wrapS)),
+        .addressModeV            = (ToVkType(sam.wrapT)),
+        .addressModeW            = (ToVkType(sam.wrapT)),
+        .anisotropyEnable        = (false),
+        .maxAnisotropy           = (1.0f),
+        .compareEnable           = (false),
+        .compareOp               = VK_COMPARE_OP_NEVER,
+        .minLod                  = (0.0f),
+        .maxLod                  = max_lod,
+        .borderColor             = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+        .unnormalizedCoordinates = (false),
+    };
+    VkFormat   format = ToVkType(image.header.format);
+    VkExtent3D ext { (u32)image_slot.width, (u32)image_slot.height, 1 };
+
+    if (auto opt = CreateImage(device,
+                               ext,
+                               (u32)mipmap_levels,
+                               format,
+                               sampler_info,
+                               VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+        opt.has_value()) {
+        image_paras = std::move(opt.value());
+        return true;
+    }
+
+    return false;
+}
+
+bool CreateImageSlotsForTexture(const Device& device, const Image& image, ImageSlots& img_slots) {
+    ImageSlots next_slots;
+    next_slots.slots.resize(image.slots.size());
+
+    for (usize i = 0; i < image.slots.size(); i++) {
+        if (!CreateImageSlotForTexture(device, image, i, next_slots.slots[i])) return false;
+    }
+    img_slots = std::move(next_slots);
+    return true;
+}
+} // namespace
+
+std::size_t TextureKey::HashValue(const TextureKey& k) {
+    std::size_t seed { 0 };
+    utils::hash_combine(seed, k.width);
+    utils::hash_combine(seed, k.height);
+    utils::hash_combine(seed, (int)k.usage);
+    utils::hash_combine(seed, (int)k.format);
+    utils::hash_combine(seed, (int)k.mipmap_level);
+
+    utils::hash_combine(seed, (int)k.sample.wrapS);
+    utils::hash_combine(seed, (int)k.sample.wrapT);
+    utils::hash_combine(seed, (int)k.sample.magFilter);
+    utils::hash_combine(seed, (int)k.sample.minFilter);
+    utils::hash_combine(seed, (int)k.sample_count);
+    return seed;
+}
+
+ImageSlotsRef TextureCache::CreateTex(Image& image) {
+    m_streaming_tex_uploads.erase(image.key);
+    const auto image_revision = CacheRevisionFor(image);
+    // Dynamic textures (live text glyph pages, script-updated images) re-enter here every frame
+    // with a new revision. Only a key's first residency is reported; revision re-uploads and
+    // slot re-creations for an already-known key stay quiet.
+    const bool first_residency = ! exists(m_tex_map, image.key);
+    if (! first_residency) {
+        auto& cached = m_tex_map.at(image.key);
+        const auto cached_revision_it = m_tex_revision_map.find(image.key);
+        if (cached_revision_it != m_tex_revision_map.end() &&
+            cached_revision_it->second == image_revision) {
+            return cached;
+        }
+
+        purgeQueuedWorkForKey(image.key);
+        if (CanReuseTextureSlots(cached, image) &&
+            QueueImageDataUploads(m_device,
+                                  image.key,
+                                  image,
+                                  cached,
+                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                  m_pending_image_uploads)) {
+            m_tex_revision_map[image.key] = image_revision;
+            return cached;
+        }
+
+        m_tex_map.erase(image.key);
+        m_tex_revision_map.erase(image.key);
+    }
+
+    ImageSlots img_slots;
+    if (!CreateImageSlotsForTexture(m_device, image, img_slots)) return {};
+
+    if (!QueueImageDataUploads(
+            m_device, image.key, image, img_slots, VK_IMAGE_LAYOUT_UNDEFINED, m_pending_image_uploads)) {
+        return {};
+    }
+    m_tex_map[image.key] = std::move(img_slots);
+    m_tex_revision_map[image.key] = image_revision;
+    if (first_residency) {
+        LOG_INFO("TextureCacheUploadQueued: key='%s' slots=%zu revision=%zu",
+                 image.key.c_str(),
+                 image.slots.size(),
+                 static_cast<size_t>(image.revision));
+    }
+    return m_tex_map[image.key];
+}
+
+std::optional<ImageSlotsRef> TextureCache::FindTex(std::string_view key) const {
+    const std::string key_string(key);
+    if (m_streaming_tex_uploads.count(key_string) != 0) return std::nullopt;
+    const auto        texture_it = m_tex_map.find(key_string);
+    if (texture_it == m_tex_map.end()) return std::nullopt;
+    if (!TextureSlotsResident(texture_it->second)) return std::nullopt;
+    return ImageSlotsRef(texture_it->second);
+}
+
+TextureCacheStreamingState TextureCache::StagePendingTexUploads(std::string_view key,
+                                                                std::size_t byte_budget) {
+    const std::string key_string(key);
+    auto              streaming_it = m_streaming_tex_uploads.find(key_string);
+    if (streaming_it == m_streaming_tex_uploads.end()) {
+        return m_tex_map.find(key_string) != m_tex_map.end()
+                   ? TextureCacheStreamingState::Ready
+                   : TextureCacheStreamingState::Failed;
+    }
+
+    auto& streaming = streaming_it->second;
+    auto  slots_it  = m_tex_map.find(key_string);
+    auto abort_streaming = [&]() {
+        purgeQueuedWorkForKey(key_string);
+        m_tex_map.erase(key_string);
+        m_tex_revision_map.erase(key_string);
+    };
+    if (streaming.image == nullptr || slots_it == m_tex_map.end()) {
+        abort_streaming();
+        return TextureCacheStreamingState::Failed;
+    }
+
+    std::size_t staged_bytes = 0;
+    std::size_t staged_slots = 0;
+    while (!streaming.remaining_slots.empty()) {
+        const auto slot_index = streaming.remaining_slots.front();
+        if (slot_index >= streaming.image->slots.size()) {
+            streaming.remaining_slots.pop_front();
+            continue;
+        }
+
+        const auto slot_bytes = ImageSlotUploadBytes(streaming.image->slots[slot_index]);
+        if (staged_slots != 0 && byte_budget != 0 && staged_bytes + slot_bytes > byte_budget) {
+            break;
+        }
+
+        auto& gpu_slot = slots_it->second.slots[slot_index];
+        if (!gpu_slot.handle || !gpu_slot.view || !gpu_slot.sampler) {
+            // Allocate the backing VkImage only for the slot that is about to be streamed. The old
+            // implementation created every sprite-frame image up front, which could still create a
+            // visible hitch even though upload-buffer construction was byte-budgeted. This mirrors
+            // the staged residency model in mature engines: CPU decode, GPU image allocation, and
+            // staging-buffer copies all advance in small chunks while the old frame keeps drawing.
+            if (!CreateImageSlotForTexture(m_device, *streaming.image, slot_index, gpu_slot)) {
+                abort_streaming();
+                return TextureCacheStreamingState::Failed;
+            }
+        }
+
+        auto upload = BuildImageUploadJob(m_device,
+                                          key_string,
+                                          *streaming.image,
+                                          slots_it->second,
+                                          slot_index,
+                                          streaming.old_layout);
+        if (!upload.has_value()) {
+            abort_streaming();
+            return TextureCacheStreamingState::Failed;
+        }
+        m_pending_image_uploads.emplace_back(std::move(upload.value()));
+        streaming.remaining_slots.pop_front();
+        staged_bytes += slot_bytes;
+        staged_slots++;
+    }
+
+    if (staged_slots != 0) {
+        LOG_INFO("TextureCacheStreamingStage: key='%s' staged-slots=%zu staged-bytes=%zu "
+                 "remaining-slots=%zu",
+                 key_string.c_str(),
+                 staged_slots,
+                 staged_bytes,
+                 streaming.remaining_slots.size());
+    }
+
+    if (streaming.remaining_slots.empty()) {
+        m_streaming_tex_uploads.erase(streaming_it);
+        LOG_INFO("TextureCacheStreamingReady: key='%s'", key_string.c_str());
+        return TextureCacheStreamingState::Ready;
+    }
+
+    return TextureCacheStreamingState::Waiting;
+}
+
+TextureCacheStreamingState
+TextureCache::StageTexUploads(std::shared_ptr<Image> image,
+                              std::optional<usize> priority_slot,
+                              std::size_t byte_budget) {
+    if (image == nullptr || image->key.empty()) return TextureCacheStreamingState::Failed;
+    const std::string key = image->key;
+    const auto image_revision = CacheRevisionFor(*image);
+
+    auto cached_it = m_tex_map.find(key);
+    if (cached_it != m_tex_map.end()) {
+        const auto cached_revision_it = m_tex_revision_map.find(key);
+        if (cached_revision_it != m_tex_revision_map.end() &&
+            cached_revision_it->second == image_revision &&
+            m_streaming_tex_uploads.count(key) == 0) {
+            return TextureCacheStreamingState::Ready;
+        }
+
+        if (cached_revision_it == m_tex_revision_map.end() ||
+            !(cached_revision_it->second == image_revision)) {
+            purgeQueuedWorkForKey(key);
+            if (CanReuseTextureSlots(cached_it->second, *image)) {
+                StreamingTexUpload streaming;
+                streaming.image      = std::move(image);
+                streaming.old_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                for (usize i = 0; i < cached_it->second.slots.size(); i++) {
+                    streaming.remaining_slots.push_back(i);
+                }
+                m_tex_revision_map[key] = image_revision;
+                m_streaming_tex_uploads[key] = std::move(streaming);
+            } else {
+                m_tex_map.erase(key);
+                m_tex_revision_map.erase(key);
+                m_streaming_tex_uploads.erase(key);
+            }
+        }
+    }
+
+    if (m_tex_map.find(key) == m_tex_map.end()) {
+        ImageSlots img_slots;
+        img_slots.slots.resize(image->slots.size());
+
+        StreamingTexUpload streaming;
+        streaming.image = image;
+        if (priority_slot.has_value() && *priority_slot < image->slots.size()) {
+            streaming.remaining_slots.push_back(*priority_slot);
+        }
+        for (usize i = 0; i < image->slots.size(); i++) {
+            if (priority_slot.has_value() && i == *priority_slot) continue;
+            streaming.remaining_slots.push_back(i);
+        }
+        m_tex_map[key] = std::move(img_slots);
+        m_tex_revision_map[key] = image_revision;
+        m_streaming_tex_uploads[key] = std::move(streaming);
+        const auto priority_label =
+            priority_slot.has_value() ? std::to_string(*priority_slot) : std::string("none");
+        LOG_INFO("TextureCacheStreamingCreate: key='%s' slots=%zu revision=%zu priority=%s",
+                 key.c_str(),
+                 image->slots.size(),
+                 static_cast<size_t>(image->revision),
+                 priority_label.c_str());
+    }
+
+    return StagePendingTexUploads(key, byte_budget);
+}
+
+void TextureCache::allocateCmd() {
+    const auto& pool = m_device.cmd_pool();
+    VVK_CHECK(pool.Allocate(1, VK_COMMAND_BUFFER_LEVEL_PRIMARY, m_tex_cmds));
+    m_tex_cmd = vvk::CommandBuffer(m_tex_cmds[0], m_device.handle().Dispatch());
+}
+
+std::optional<VmaImageParameters> TextureCache::CreateTex(TextureKey tex_key) {
+    VmaImageParameters image_paras;
+    do {
+        VkSamplerCreateInfo sam_info = GenSamplerInfo(tex_key);
+        VkExtent3D          ext { (u32)tex_key.width, (u32)tex_key.height, 1 };
+        const auto samples = static_cast<VkSampleCountFlagBits>(
+            tex_key.sample_count > 0 ? tex_key.sample_count : 1u);
+
+        if (tex_key.usage == TexUsage::DEPTH) {
+            if (auto opt = CreateImage(m_device,
+                                       ext,
+                                       1,
+                                       VK_FORMAT_D32_SFLOAT,
+                                       sam_info,
+                                       VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                                           VK_IMAGE_USAGE_SAMPLED_BIT |
+                                           VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                                           VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                                       VMA_MEMORY_USAGE_GPU_ONLY,
+                                       VK_IMAGE_ASPECT_DEPTH_BIT,
+                                       samples);
+                opt.has_value()) {
+                image_paras = std::move(opt.value());
+            } else
+                break;
+            return image_paras;
+        }
+
+        VkFormat format = ToVkType(tex_key.format);
+        if (auto opt =
+                CreateImage(m_device,
+                            ext,
+                            tex_key.mipmap_level,
+                            format,
+                            sam_info,
+                            VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                                VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                            VMA_MEMORY_USAGE_GPU_ONLY,
+                            VK_IMAGE_ASPECT_COLOR_BIT,
+                            samples);
+            opt.has_value()) {
+            image_paras = std::move(opt.value());
+        } else
+            break;
+
+        return image_paras;
+    } while (false);
+    return std::nullopt;
+}
+
+TextureCache::TextureCache(const Device& device): m_device(device) {}
+
+TextureCache::~TextureCache() {};
+
+void TextureCache::Clear() {
+    m_tex_map.clear();
+    m_tex_revision_map.clear();
+    m_query_texs.clear();
+    m_query_map.clear();
+    m_streaming_tex_uploads.clear();
+    m_pending_image_uploads.clear();
+    m_inflight_image_uploads.clear();
+    m_pending_render_target_clears.clear();
+    m_deferred_graph_activation_depth = 0;
+    m_deferred_share_ready_keys.clear();
+}
+
+bool TextureCache::ReleaseTexture(std::string_view key) {
+    const std::string key_string(key);
+    const auto        before_bytes = GetTrackedBytes();
+    const auto        before_count = GetTrackedImageCount();
+
+    purgeQueuedWorkForKey(key_string);
+    const auto erased = m_tex_map.erase(key_string);
+    m_tex_revision_map.erase(key_string);
+    if (erased == 0) return false;
+
+    LOG_INFO("TextureCacheRelease: static key='%s' bytes-before=%zu bytes-after=%zu "
+             "images-before=%zu images-after=%zu",
+             key_string.c_str(),
+             before_bytes,
+             GetTrackedBytes(),
+             before_count,
+             GetTrackedImageCount());
+    return true;
+}
+
+bool TextureCache::ReleaseRenderTarget(std::string_view key) {
+    const std::string key_string(key);
+    const auto        query_it = m_query_map.find(key_string);
+    if (query_it == m_query_map.end() || query_it->second == nullptr) return false;
+
+    purgeQueuedWorkForKey(key_string);
+    const auto before_bytes = GetTrackedBytes();
+    const auto before_count = GetTrackedImageCount();
+    auto*      query        = query_it->second;
+
+    query->query_keys.erase(key_string);
+    m_query_map.erase(query_it);
+
+    if (! query->query_keys.empty()) {
+        query->share_ready = false;
+        LOG_INFO("TextureCacheRelease: render-target key='%s' detached shared-entry remaining=%zu "
+                 "bytes=%zu images=%zu",
+                 key_string.c_str(),
+                 query->query_keys.size(),
+                 GetTrackedBytes(),
+                 GetTrackedImageCount());
+        return true;
+    }
+
+    const auto query_ptr = query;
+    for (auto iter = m_query_texs.begin(); iter != m_query_texs.end(); ++iter) {
+        if (! *iter || iter->get() != query_ptr) continue;
+        m_query_texs.erase(iter);
+        LOG_INFO("TextureCacheRelease: render-target key='%s' bytes-before=%zu bytes-after=%zu "
+                 "images-before=%zu images-after=%zu",
+                 key_string.c_str(),
+                 before_bytes,
+                 GetTrackedBytes(),
+                 before_count,
+                 GetTrackedImageCount());
+        return true;
+    }
+
+    LOG_ERROR("TextureCacheRelease: render-target key='%s' missing owning cache entry",
+              key_string.c_str());
+    return true;
+}
+
+std::optional<ImageParameters> TextureCache::Query(std::string_view key, TextureKey content_hash,
+                                                   bool persist) {
+    const std::string key_string(key);
+    const TexHash     tex_hash = TextureKey::HashValue(content_hash);
+    auto queue_initial_clear = [&](const VmaImageParameters& image) {
+        if (content_hash.usage == TexUsage::DEPTH) return;
+        // The render target may be sampled by a feedback pass before a writer touches it. Keep the
+        // deterministic transparent-black bootstrap, but record it into the renderer's next frame
+        // command buffer so visibility changes do not force a synchronous DeviceWaitIdle.
+        purgeQueuedWorkForKey(key_string);
+        m_pending_render_target_clears.push_back(TextureCachePendingRenderTargetClear {
+            .key   = key_string,
+            .image = ImageParameters(image),
+        });
+        LOG_INFO("TextureCacheInitialClearQueued: key='%s' render-target=%dx%d mip-levels=%u "
+                 "transparent-black=true",
+                 key_string.c_str(),
+                 content_hash.width,
+                 content_hash.height,
+                 content_hash.mipmap_level);
+    };
+
+    if (exists(m_query_map, key_string)) {
+        auto* query = m_query_map.find(key_string)->second;
+
+        if (!(query->content_key == content_hash)) {
+            // Resource-only render graph refreshes must behave like particle updates: keep the
+            // graph and unrelated GPU resources alive, then resize only the specific offscreen
+            // image whose render-target contract changed. The old cache returned stale images for
+            // an existing key until the entire cache was cleared, which made minute-level text
+            // bridge updates recreate every scene texture and caused visible hitches.
+            LOG_INFO("TextureCache: resize cached render target key='%s' previousHash=%zu nextHash=%zu "
+                     "previousSize=[%u, %u] nextSize=[%d, %d]",
+                     key_string.c_str(),
+                     query->content_hash,
+                     tex_hash,
+                     query->image.extent.width,
+                     query->image.extent.height,
+                     content_hash.width,
+                     content_hash.height);
+
+            if (query->query_keys.size() > 1) {
+                // A reusable image can be shared by multiple logical render-target keys. When only
+                // one key changes size, detach that key into a fresh cache entry so the remaining
+                // users keep sampling their still-valid image instead of being silently resized.
+                query->query_keys.erase(key_string);
+                m_query_map.erase(key_string);
+            } else {
+                if (auto opt = CreateTex(content_hash); opt.has_value()) {
+                    query->image        = std::move(opt.value());
+                    query->content_key  = content_hash;
+                    query->content_hash = tex_hash;
+                    query->share_ready  = false;
+                    query->persist      = persist;
+                    query->query_keys.clear();
+                    query->query_keys.insert(key_string);
+                    m_query_map[key_string] = query;
+                    queue_initial_clear(query->image);
+                    return query->image;
+                }
+                return std::nullopt;
+            }
+        } else {
+            query->share_ready = false;
+            query->persist     = persist;
+
+            return query->image;
+        }
+    };
+
+    for (auto& query : m_query_texs) {
+        if (! (query->share_ready)) continue;
+        if (!(query->content_key == content_hash)) continue;
+
+        query->share_ready = false;
+        query->persist     = persist;
+        query->query_keys.insert(key_string);
+
+        m_query_map[key_string] = &(*query);
+
+        return query->image;
+    }
+
+    m_query_texs.emplace_back(std::make_unique<QueryTex>());
+    auto& query                   = *m_query_texs.back();
+    m_query_map[key_string] = &query;
+
+    query.index        = (idx)m_query_texs.size() - 1;
+    query.content_key  = content_hash;
+    query.content_hash = tex_hash;
+    query.query_keys.insert(key_string);
+    query.persist = persist;
+    if (auto opt = CreateTex(content_hash); opt.has_value()) {
+        query.image = std::move(opt.value());
+        queue_initial_clear(query.image);
+        return query.image;
+    }
+    return std::nullopt;
+}
+
+void TextureCache::MarkShareReady(std::string_view key) {
+    const std::string key_string(key);
+    const auto query_it = m_query_map.find(key_string);
+    if (query_it == m_query_map.end()) return;
+
+    // Copy the cached QueryTex pointer before erasing the lookup entry. Holding a reference to the
+    // map value across `erase()` leaves a dangling reference, and minute-rollover text bridge
+    // refreshes hit that path when the final effect pass releases the resized clock source.
+    auto* query = query_it->second;
+    if (query == nullptr) {
+        m_query_map.erase(query_it);
+        return;
+    }
+    if (query->persist) return;
+
+    if (m_deferred_graph_activation_depth != 0) {
+        // Deferred render-graph activation is allowed to prepare passes across several frames, but
+        // transient aliasing is not allowed to advance across that activation boundary. Feedback
+        // effects such as cursor ripple bind ping-pong render targets from passes that may not be
+        // prepared yet; letting an already-prepared bypass/copy pass mark those targets reusable
+        // lets a later prepare reattach the same physical image to a different logical key. Mature
+        // renderers keep transient attachment aliasing behind the graph/subgraph readiness fence,
+        // so queue the release intent and replay it only after every deferred pass is resident.
+        m_deferred_share_ready_keys.insert(key_string);
+        return;
+    }
+
+    // A texture entry is reusable only after every logical key that still references it has reached
+    // its last read. This makes per-key resize safe for shared render targets while preserving the
+    // old transient-reuse behavior for unshared effect outputs.
+    query->query_keys.erase(key_string);
+    m_query_map.erase(query_it);
+    query->share_ready = query->query_keys.empty();
+}
+
+void TextureCache::BeginDeferredGraphActivation() {
+    m_deferred_graph_activation_depth++;
+    LOG_INFO("TextureCacheDeferredGraphActivation: action=begin depth=%zu pending-share-ready=%zu",
+             m_deferred_graph_activation_depth,
+             m_deferred_share_ready_keys.size());
+}
+
+void TextureCache::EndDeferredGraphActivation() {
+    if (m_deferred_graph_activation_depth == 0) return;
+    m_deferred_graph_activation_depth--;
+    if (m_deferred_graph_activation_depth != 0) return;
+
+    auto deferred_keys = std::move(m_deferred_share_ready_keys);
+    m_deferred_share_ready_keys.clear();
+    LOG_INFO("TextureCacheDeferredGraphActivation: action=end replay-share-ready=%zu",
+             deferred_keys.size());
+    for (const auto& key : deferred_keys) {
+        MarkShareReady(key);
+    }
+}
+
+void TextureCache::CancelDeferredGraphActivation() {
+    if (m_deferred_graph_activation_depth == 0 && m_deferred_share_ready_keys.empty()) return;
+    LOG_INFO("TextureCacheDeferredGraphActivation: action=cancel depth=%zu "
+             "drop-share-ready=%zu",
+             m_deferred_graph_activation_depth,
+             m_deferred_share_ready_keys.size());
+    m_deferred_graph_activation_depth = 0;
+    m_deferred_share_ready_keys.clear();
+}
+
+void TextureCache::purgeQueuedWorkForKey(std::string_view key) {
+    const auto same_key = [key](const auto& work) {
+        return work.key == key;
+    };
+    m_pending_image_uploads.erase(std::remove_if(m_pending_image_uploads.begin(),
+                                                 m_pending_image_uploads.end(),
+                                                 same_key),
+                                  m_pending_image_uploads.end());
+    m_inflight_image_uploads.erase(std::remove_if(m_inflight_image_uploads.begin(),
+                                                  m_inflight_image_uploads.end(),
+                                                  same_key),
+                                   m_inflight_image_uploads.end());
+    m_pending_render_target_clears.erase(
+        std::remove_if(m_pending_render_target_clears.begin(),
+                       m_pending_render_target_clears.end(),
+                       same_key),
+        m_pending_render_target_clears.end());
+    m_streaming_tex_uploads.erase(std::string(key));
+}
+
+void TextureCache::RecordUploads(vvk::CommandBuffer& cmd) {
+    if (m_pending_render_target_clears.empty() && m_pending_image_uploads.empty()) return;
+
+    for (const auto& clear : m_pending_render_target_clears) {
+        RecordClearNewRenderTargetToTransparentBlack(cmd, clear.image);
+    }
+    m_pending_render_target_clears.clear();
+
+    for (auto& upload : m_pending_image_uploads) {
+        RecordCopyImageData(
+            transform<VmaBufferParameters>(upload.stage_bufs,
+                                           [](BufferParameters e) {
+                                               return e;
+                                           }),
+            upload.extents,
+            cmd,
+            upload.image,
+            upload.old_layout);
+    }
+    // Stage buffers must stay alive until the frame submission using this command buffer has
+    // finished. VulkanRender waits and resets the frame fence before starting the next frame, so
+    // RetireCompletedUploads() can drop this vector at the start of the following draw.
+    for (auto& upload : m_pending_image_uploads) {
+        m_inflight_image_uploads.emplace_back(std::move(upload));
+    }
+    m_pending_image_uploads.clear();
+}
+
+void TextureCache::RetireCompletedUploads() {
+    m_inflight_image_uploads.clear();
+}
+
+std::size_t TextureCache::GetTrackedBytes() const {
+    std::size_t total = 0;
+    for (const auto& [_, slots] : m_tex_map) {
+        total += ImageSlotsAllocationBytes(slots);
+    }
+    for (const auto& query : m_query_texs) {
+        if (! query) continue;
+        total += ImageAllocationBytes(query->image);
+    }
+    return total;
+}
+
+std::size_t TextureCache::GetTrackedImageCount() const {
+    std::size_t total = 0;
+    for (const auto& [_, slots] : m_tex_map) {
+        total += slots.slots.size();
+    }
+    for (const auto& query : m_query_texs) {
+        if (query && query->image.handle) total++;
+    }
+    return total;
+}
+
+void TextureCache::RecGenerateMipmaps(vvk::CommandBuffer& cmd, const ImageParameters& image) const {
+    VkImageMemoryBarrier barrier {
+        .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .pNext               = nullptr,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image               = image.handle,
+        .subresourceRange =
+            VkImageSubresourceRange {
+                .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel   = 0,
+                .levelCount     = 1,
+                .baseArrayLayer = 0,
+                .layerCount     = 1,
+            },
+    };
+    /*
+    cmd.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
+                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                        VK_DEPENDENCY_BY_REGION_BIT,
+                        out_bar);
+        */
+
+    i32 mipWidth  = (i32)image.extent.width;
+    i32 mipHeight = (i32)image.extent.height;
+
+    for (uint i = 1; i < image.mipmap_level; i++) {
+        barrier.subresourceRange.baseMipLevel = i - 1;
+        barrier.oldLayout                     = i == 1 ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                                       : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+
+        barrier.newLayout     = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        barrier.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+        cmd.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            VK_DEPENDENCY_BY_REGION_BIT,
+                            barrier);
+
+        barrier.subresourceRange.baseMipLevel = i;
+        barrier.oldLayout                     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.newLayout                     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+
+        cmd.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            VK_DEPENDENCY_BY_REGION_BIT,
+                            barrier);
+
+        VkImageBlit blit {
+            .srcSubresource =
+                VkImageSubresourceLayers {
+                    .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .mipLevel       = i - 1,
+                    .baseArrayLayer = 0,
+                    .layerCount     = 1,
+                },
+            .srcOffsets = { VkOffset3D { 0, 0, 0 }, VkOffset3D { mipWidth, mipHeight, 1 } },
+            .dstOffsets = { VkOffset3D { 0, 0, 0 },
+                            VkOffset3D { mipWidth > 1 ? mipWidth / 2 : 1,
+                                         mipHeight > 1 ? mipHeight / 2 : 1,
+                                         1 } },
+        };
+        blit.dstSubresource =
+            VkImageSubresourceLayers {
+                .aspectMask     = blit.srcSubresource.aspectMask,
+                .mipLevel       = blit.srcSubresource.mipLevel + 1,
+                .baseArrayLayer = 0,
+                .layerCount     = 1,
+            },
+
+        cmd.BlitImage(image.handle,
+                      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                      image.handle,
+                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                      blit,
+                      VK_FILTER_LINEAR);
+
+        barrier.subresourceRange.baseMipLevel = i - 1;
+        barrier.oldLayout                     = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        barrier.newLayout                     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.srcAccessMask                 = VK_ACCESS_TRANSFER_READ_BIT;
+        barrier.dstAccessMask                 = VK_ACCESS_SHADER_READ_BIT;
+
+        cmd.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                            VK_DEPENDENCY_BY_REGION_BIT,
+                            barrier);
+
+        if (mipWidth > 1) mipWidth /= 2;
+        if (mipHeight > 1) mipHeight /= 2;
+    }
+
+    barrier.subresourceRange.baseMipLevel = image.mipmap_level - 1;
+    barrier.oldLayout                     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.newLayout                     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier.srcAccessMask                 = VK_ACCESS_TRANSFER_READ_BIT;
+    barrier.dstAccessMask                 = VK_ACCESS_SHADER_READ_BIT;
+
+    cmd.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
+                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                        VK_DEPENDENCY_BY_REGION_BIT,
+                        barrier);
+}

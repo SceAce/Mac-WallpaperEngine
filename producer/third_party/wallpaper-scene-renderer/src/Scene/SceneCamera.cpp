@@ -1,0 +1,123 @@
+#include "SceneCamera.h"
+#include "SceneNode.h"
+#include "Utils/Logging.h"
+#include <iostream>
+#include "Utils/Eigen.h"
+
+using namespace wallpaper;
+using namespace Eigen;
+
+Vector3d SceneCamera::GetPosition() const {
+	Vector3d position = Vector3d::Zero();
+	if (m_hasExplicitView) {
+		position = m_explicitEye;
+	} else if(m_node) {
+		position = Affine3d(m_node->GetLocalTrans()) * Vector3d::Zero();
+	}
+	return position + m_shakeOffset;
+}
+
+Vector3d SceneCamera::GetDirection() const {
+	if (m_hasExplicitView) {
+		// 3D camera paths author eye/center/up directly. Returning the explicit direction keeps
+		// model-only camera uniforms synchronized with the same view matrix used for rendering.
+		Vector3d direction = m_explicitCenter - m_explicitEye;
+		if (direction.norm() > 1e-9) return direction.normalized();
+		return -Vector3d::UnitZ();
+	}
+	if(m_node) {
+		return (m_node->GetLocalTrans() * Vector4d(0.0f, 0.0f, -1.0f, 0.0f)).head<3>();
+	}
+	return -Vector3d::UnitZ();
+}
+
+Vector3d SceneCamera::GetUp() const {
+	if (m_hasExplicitView) {
+		if (m_explicitUp.norm() > 1e-9) return m_explicitUp.normalized();
+	}
+	return Vector3d::UnitY();
+}
+
+Matrix4d SceneCamera::GetViewMatrix() const {
+	return m_viewMat;
+}
+
+Matrix4d SceneCamera::GetViewProjectionMatrix() const {
+	return m_viewProjectionMat;
+}
+
+void SceneCamera::CalculateViewProjectionMatrix() {
+	// CalculateViewMatrix
+	{
+		if (m_hasExplicitView) {
+			// The model camera can be driven by Wallpaper Engine path keyframes without converting
+			// through Euler scene-node state. This explicit branch is inert for 2D cameras because
+			// only the model parser calls SetExplicitView().
+			m_viewMat = LookAt(m_explicitEye + m_shakeOffset,
+			                  m_explicitCenter + m_shakeOffset,
+			                  m_explicitUp);
+		} else if(m_node) {
+			Affine3d nodeTrans(m_node->GetLocalTrans());
+			Vector3d eye = nodeTrans * Vector3d::Zero() + m_shakeOffset;
+			Vector3d center = nodeTrans * (-Vector3d::UnitZ()) + m_shakeOffset;
+			Vector3d up = Vector3d::UnitY();
+			m_viewMat = LookAt(eye, center, up);
+		} else 
+			m_viewMat = Matrix4d::Identity();
+	};
+
+	if(m_perspective) {
+		m_viewProjectionMat = Perspective(Radians(m_fov), m_aspect, m_nearClip, m_farClip) * m_viewMat;
+	} else {
+		double left = m_hasExplicitOrthoRect ? m_orthoLeft : -m_width/2.0f;
+		double right = m_hasExplicitOrthoRect ? m_orthoRight : m_width/2.0f;
+		double bottom = m_hasExplicitOrthoRect ? m_orthoBottom : -m_height/2.0f;
+		double up = m_hasExplicitOrthoRect ? m_orthoTop : m_height/2.0f;
+		m_viewProjectionMat = Ortho(left, right, bottom, up, m_nearClip, m_farClip) * m_viewMat;
+	}
+}
+
+void SceneCamera::SetOrthographicViewRect(double left, double right, double bottom, double top) {
+	if (m_perspective) {
+		LOG_ERROR("cannot set orthographic view rect on perspective camera");
+		return;
+	}
+	if (!(right > left) || !(top > bottom)) {
+		LOG_ERROR("invalid orthographic view rect left=%f right=%f bottom=%f top=%f",
+		          left, right, bottom, top);
+		return;
+	}
+	m_orthoLeft = left;
+	m_orthoRight = right;
+	m_orthoBottom = bottom;
+	m_orthoTop = top;
+	m_width = right - left;
+	m_height = top - bottom;
+	m_aspect = m_height > 0.0 ? m_width / m_height : 1.0;
+	m_hasExplicitOrthoRect = true;
+	Update();
+}
+
+void SceneCamera::Update() {
+	CalculateViewProjectionMatrix();
+}
+
+
+void SceneCamera::AttatchNode(std::shared_ptr<SceneNode> node) {
+	if(!node) {
+		LOG_ERROR("Attach a null node to camera");		
+		return;
+	}
+	m_node = node;
+	Update();
+}
+
+void SceneCamera::SetExplicitView(const Eigen::Vector3d& eye,
+                                  const Eigen::Vector3d& center,
+                                  const Eigen::Vector3d& up) {
+	m_explicitEye = eye;
+	m_explicitCenter = center;
+	m_explicitUp = up;
+	m_hasExplicitView = true;
+	Update();
+}

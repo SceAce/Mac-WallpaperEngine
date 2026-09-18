@@ -1,3 +1,23 @@
-[submodule "producer/third_party/wallpaper-scene-renderer"]
-	path = producer/third_party/wallpaper-scene-renderer
-	url = https://github.com/ayasa520/wallpaper-scene-renderer
+[submodule "scene/SPIRV-Reflect"]
+	path = producer/third_party/wallpaper-scene-renderer/third_party/SPIRV-Reflect
+	url = https://github.com/KhronosGroup/SPIRV-Reflect.git
+	shallow = true
+[submodule "scene/nlohmann"]
+	path = producer/third_party/wallpaper-scene-renderer/third_party/nlohmann
+	url = https://github.com/nlohmann/json.git
+	shallow = true
+[submodule "scene/miniaudio"]
+	path = producer/third_party/wallpaper-scene-renderer/third_party/miniaudio
+	url = https://github.com/mackron/miniaudio.git
+	shallow = true
+[submodule "scene/Eigen"]
+	path = producer/third_party/wallpaper-scene-renderer/third_party/Eigen
+	url = https://gitlab.com/libeigen/eigen.git
+	shallow = true
+[submodule "scene/quickjs"]
+	path = producer/third_party/wallpaper-scene-renderer/third_party/quickjs
+	url = https://github.com/quickjs-ng/quickjs.git
+[submodule "scene/DirectXShaderCompiler"]
+	path = producer/third_party/wallpaper-scene-renderer/third_party/DirectXShaderCompiler
+	url = https://github.com/microsoft/DirectXShaderCompiler.git
+	shallow = true

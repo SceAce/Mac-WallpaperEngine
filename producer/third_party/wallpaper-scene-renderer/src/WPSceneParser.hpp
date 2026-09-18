@@ -1,0 +1,41 @@
+#pragma once
+#include "Interface/ISceneParser.h"
+#include "WPSceneScriptHost.hpp"
+#include "WPUserProperties.hpp"
+#include <nlohmann/json_fwd.hpp>
+#include <array>
+#include <cstdint>
+#include <random>
+
+namespace wallpaper
+{
+
+class Scene;
+
+class WPSceneParser : public ISceneParser {
+public:
+    WPSceneParser()  = default;
+    ~WPSceneParser() = default;
+    // `output_extent` is the live output framebuffer size at load. Fullscreen layers sample that
+    // framebuffer, so their effect targets are allocated at this pixel size; {0, 0} means no live
+    // output is known and the authored canvas is used instead.
+    std::shared_ptr<Scene> Parse(std::string_view scene_id, const std::string&, fs::VFS&,
+                                 audio::SoundManager&, const UserPropertyMap* user_properties,
+                                 double                  text_render_scale         = 1.0,
+                                 std::array<uint32_t, 2> output_extent             = { 0u, 0u },
+                                 bool                    supports_geometry_shaders = true);
+    std::shared_ptr<Scene> Parse(std::string_view scene_id, const std::string&, fs::VFS&, audio::SoundManager&) override;
+};
+
+bool CreateDynamicSceneLayer(Scene&                                      scene,
+                             const nlohmann::json&                       object_json,
+                             const UserPropertyMap*                      user_properties,
+                             std::vector<WPSceneScriptRegistration>*     out_binding_registrations            = nullptr,
+                             std::vector<WPSceneScriptRegistration>*     out_script_registrations             = nullptr,
+                             std::vector<WPSceneScriptRegistration>*     out_property_animation_registrations = nullptr,
+                             std::string*                                out_initial_config_json              = nullptr,
+                             int32_t*                                    out_layer_id                         = nullptr);
+
+bool ConfigureSceneVolumetrics(Scene& scene, fs::VFS& vfs);
+bool ConfigureSceneBloom(Scene& scene, fs::VFS& vfs);
+} // namespace wallpaper
