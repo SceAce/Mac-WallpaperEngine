@@ -8,6 +8,11 @@
 
 Vivid is an open-source reimplementation of Wallpaper Engine for Linux.
 
+This fork's macOS port targets Apple Silicon and macOS 26+ and now plays scene
+wallpapers through Vivid's C++ core. See the [macOS build guide](macos/README.md)
+and [verification record](docs/macos-scene-validation.zh-CN.md). The release instructions
+below describe the original Linux application.
+
 **THIS PROJECT USES VIBE CODING.**
 
 ## Install a release

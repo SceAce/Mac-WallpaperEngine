@@ -8,6 +8,8 @@
 
 Vivid 是 Wallpaper Engine 的 Linux 开源重实现。
 
+本仓库的 macOS 移植面向 Apple Silicon、macOS 26+，已通过 Vivid 原 C++ 核心接通真实 scene 播放。构建入口见 [macOS 说明](macos/README.zh-CN.md)，兼容性及实测结果见 [scene 验证记录](docs/macos-scene-validation.zh-CN.md)。当前为开发版本；以下发行安装说明仍对应原版 Linux Vivid。
+
 **本项目使用 VIBE CODING 开发。**
 
 ## 安装发行版
