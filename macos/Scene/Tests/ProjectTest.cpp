@@ -46,6 +46,15 @@ int main() {
         require(std::get<wallpaper::ShaderValue>(project.properties.at("color").value).size() == 3);
         require(std::get<wallpaper::ShaderValue>(project.properties.at("vector").value).size() == 3);
         require(project.properties.at("vector").condition == "enabled");
+        const auto changed = vivid::scene::Project::parseProperties(
+            project.property_definitions,
+            {{"toggle", true}, {"text", "456 edited"}, {"vector", "0.1 0.2 0.3"}});
+        require(wallpaper::IsUserPropertyTruthy(changed.at("toggle").value));
+        require(std::get<std::string>(changed.at("text").value) == "456 edited");
+        require(changed.at("vector").condition == "enabled");
+        const auto reset =
+            vivid::scene::Project::parseProperties(project.property_definitions, nlohmann::json::object());
+        require(!wallpaper::IsUserPropertyTruthy(reset.at("toggle").value));
         for (const auto entry : {"../scene.json", "/tmp/scene.json", "missing.json"}) {
             manifest["file"] = entry;
             save();

@@ -14,9 +14,10 @@ let package = Package(
         .library(name: "VividMacOSCore", targets: ["VividMacOSCore"]),
     ],
     targets: [
+        .testTarget(name: "VividMacOSCoreTests", dependencies: ["VividMacOSCore"]),
         .target(
-            name: "VividSceneClient",
-            path: "Sources/VividSceneClient",
+            name: "VividRenderClient",
+            path: "Sources/VividRenderClient",
             cSettings: [.unsafeFlags(["-fobjc-arc", "-Wall", "-Wextra", "-Werror"])],
             linkerSettings: [
                 .linkedFramework("IOSurface"), .linkedFramework("CoreVideo"), .linkedFramework("Metal"),
@@ -24,7 +25,7 @@ let package = Package(
         ),
         .target(
             name: "VividMacOSCore",
-            dependencies: ["VividSceneClient"],
+            dependencies: ["VividRenderClient"],
             path: "Sources/VividMacOSCore"
         ),
         .executableTarget(
@@ -38,7 +39,7 @@ let package = Package(
             path: "Sources/VividMacOSSelfTest"
         ),
         .executableTarget(
-            name: "VividSceneSelfTest", dependencies: ["VividSceneClient"],
+            name: "VividSceneSelfTest", dependencies: ["VividRenderClient"],
             path: "Sources/VividSceneSelfTest"),
     ]
 )

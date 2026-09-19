@@ -2,12 +2,13 @@ import AppKit
 import ImageIO
 import Metal
 import UniformTypeIdentifiers
-import VividSceneClient
+import VividRenderClient
 
 @MainActor
 final class SceneTest: NSObject, NSApplicationDelegate {
-    private var client: VividSceneClient?
+    private var client: VividRenderClient?
     private var timeout: Timer?
+    private let webTest = ProcessInfo.processInfo.environment["VIVID_TEST_SERVICE"] == "org.sceace.vivid.web"
     private var frames = 0
     private var samples: [[UInt8]] = []
     private var started = Date()
@@ -15,7 +16,7 @@ final class SceneTest: NSObject, NSApplicationDelegate {
     private var completed = false
     private var pauseVerified = false
     private var backpressureVerified = false
-    private var heldFrames: [VividSceneFrame] = []
+    private var heldFrames: [VividRenderFrame] = []
     private var captureDuration: TimeInterval = 0
     private var stopped = false
     private let device = MTLCreateSystemDefaultDevice()!
@@ -33,8 +34,10 @@ final class SceneTest: NSObject, NSApplicationDelegate {
             finish(error.localizedDescription)
             return
         }
-        client = VividSceneClient(
+        client = VividRenderClient(
             device: device,
+            serviceName: ProcessInfo.processInfo.environment["VIVID_TEST_SERVICE"]
+                ?? "org.sceace.vivid.scene",
             onFrame: { [weak self] frame in
                 self?.receive(frame)
             }, onFailure: { [weak self] reason in self?.finish(reason) })
@@ -44,11 +47,13 @@ final class SceneTest: NSObject, NSApplicationDelegate {
             URL(fileURLWithPath: arguments[1]), assets: URL(fileURLWithPath: arguments[2]),
             cache: cache, width: 960, height: 600, muted: true)
         timeout = Timer.scheduledTimer(withTimeInterval: 90, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated { self?.finish("Timed out waiting for scene frames") }
+            MainActor.assumeIsolated {
+                self?.finish("Timed out waiting for renderer frames (received \(self?.frames ?? 0))")
+            }
         }
     }
 
-    private func receive(_ frame: VividSceneFrame) {
+    private func receive(_ frame: VividRenderFrame) {
         defer {
             if frames <= 3 && !completed { heldFrames.append(frame) } else { frame.releaseFrame() }
         }
@@ -81,6 +86,12 @@ final class SceneTest: NSObject, NSApplicationDelegate {
                 }
                 self.heldFrames.removeAll()
             }
+        }
+        if webTest && frames == 30 {
+            let settings = Data(
+                #"{"fps":30,"volume":0.5,"muted":true,"fit":1,"properties":{"tint":"0.8 0.1 0.3","label":"Properties applied"}}"#
+                    .utf8)
+            client?.configure(withSettings: settings)
         }
         if frames >= 20 && frames <= 95 {
             let phase = Double(frames - 20) / 30.0
@@ -135,6 +146,9 @@ final class SceneTest: NSObject, NSApplicationDelegate {
                 buffer.baseAddress!, bytesPerRow: source.width * 4,
                 from: MTLRegionMake2D(0, 0, source.width, source.height), mipmapLevel: 0)
         }
+        if source.pixelFormat == .bgra8Unorm_srgb || source.pixelFormat == .bgra8Unorm {
+            for pixel in stride(from: 0, to: bytes.count, by: 4) { bytes.swapAt(pixel, pixel + 2) }
+        }
         samples.append(bytes)
         let provider = CGDataProvider(data: Data(bytes) as CFData)!
         let image = CGImage(
@@ -159,6 +173,19 @@ final class SceneTest: NSObject, NSApplicationDelegate {
                 .count
             guard transparentPixels == 0 else {
                 finish("Opaque desktop scene lost coverage at \(transparentPixels) pixels")
+                return
+            }
+        }
+        if webTest {
+            let offset = (400 * 960 + 10) * 4
+            let expected = [204, 26, 77]
+            guard (0..<3).allSatisfy({ abs(Int(samples[2][offset + $0]) - expected[$0]) <= 2 }) else {
+                finish("Web user properties or BGRA channel conversion failed")
+                return
+            }
+            let clickOffset = (10 * 960 + 940) * 4
+            guard samples[2][clickOffset + 1] == 255 && samples[2][clickOffset] == 0 else {
+                finish("Web mouse click was not delivered")
                 return
             }
         }

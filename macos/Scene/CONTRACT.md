@@ -49,3 +49,11 @@ selected by CMake, not patched during a build.
 Initial backend dependency: MoltenVK 1.4.2 (public API macOS distribution), and the
 already pinned DXC commit built natively for arm64. Runtime texture formats and
 particle coverage must be verified on the actual M1 Pro.
+
+Runtime settings use a `configure` message with validated JSON (fps, fit, volume,
+muted, properties). The same payload may be staged in `start`; defaults and
+property conditions come from project.json. `PROPERTY_LOAD_USER_PROPERTIES` is
+used before loading, and `PROPERTY_USER_PROPERTIES` for subsequent live changes.
+Changing unrelated settings does not re-dispatch unchanged user properties.
+The common VividRenderClient/RenderServiceView transport also accepts the web
+service's BGRA8 pool; it does not reinterpret channel order as RGBA.

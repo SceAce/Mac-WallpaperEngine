@@ -31,8 +31,22 @@ Project Project::load(const fs::path& directory, const fs::path& assets_director
     if (!fs::is_regular_file(project.assets / "shaders/common.h"))
         throw std::runtime_error("Invalid Wallpaper Engine assets directory");
     const auto general = manifest.value("general", nlohmann::json::object());
-    const auto properties = general.value("properties", nlohmann::json::object());
-    for (const auto& [name, object] : properties.items()) {
+    project.property_definitions = general.value("properties", nlohmann::json::object());
+    project.properties = parseProperties(project.property_definitions, nlohmann::json::object());
+    return project;
+}
+
+wallpaper::UserPropertyMap Project::parseProperties(nlohmann::json definitions,
+                                                    const nlohmann::json& values) {
+    if (!values.is_object())
+        throw std::runtime_error("User properties must be an object");
+    for (const auto& [name, value] : values.items()) {
+        if (definitions.contains(name) && definitions[name].is_object())
+            definitions[name]["value"] =
+                value.is_object() && value.contains("value") ? value["value"] : value;
+    }
+    wallpaper::UserPropertyMap result;
+    for (const auto& [name, object] : definitions.items()) {
         if (!object.is_object() || !object.contains("value"))
             continue;
         const auto property_type = wallpaper::LowerString(object.value("type", std::string{}));
@@ -79,7 +93,7 @@ Project Project::load(const fs::path& directory, const fs::path& assets_director
             auto text = value.get<std::string>();
             if (string_value) {
                 property.value = std::move(text);
-                project.properties.emplace(name, std::move(property));
+                result.emplace(name, std::move(property));
                 continue;
             }
             std::replace(text.begin(), text.end(), ',', ' ');
@@ -101,7 +115,7 @@ Project Project::load(const fs::path& directory, const fs::path& assets_director
         } else {
             continue;
         }
-        project.properties.emplace(name, std::move(property));
+        result.emplace(name, std::move(property));
     }
-    return project;
+    return result;
 }

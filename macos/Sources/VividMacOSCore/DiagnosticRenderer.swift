@@ -24,7 +24,7 @@ public final class DiagnosticRenderer {
             texture = try MTKTextureLoader(device: device).newTexture(
                 URL: url,
                 options: [.SRGB: true, .origin: MTKTextureLoader.Origin.topLeft, .generateMipmaps: false])
-        case .sceneProject:
+        case .sceneProject, .project:
             throw WallpaperSourceError.sceneRequiresService
         }
         presenter = try TexturePresenter(device: device)

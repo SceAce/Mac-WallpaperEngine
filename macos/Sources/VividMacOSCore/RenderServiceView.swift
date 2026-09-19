@@ -1,6 +1,6 @@
 import AppKit
 import MetalKit
-import VividSceneClient
+import VividRenderClient
 
 public struct ScenePlaybackError: LocalizedError {
     public let reason: String
@@ -9,17 +9,18 @@ public struct ScenePlaybackError: LocalizedError {
 }
 
 @MainActor
-public final class SceneWallpaperView: MTKView, MTKViewDelegate {
+public final class RenderServiceView: MTKView, MTKViewDelegate {
     public var onFrameCompleted: (() -> Void)?
     public var onFailure: ((Error) -> Void)?
+    private let serviceName: String
     private let project: URL
     private let assets: URL
-    private let muted: Bool
+    private var settings: PlaybackSettings
     private let cache: URL
     private let presenter: TexturePresenter
     private let commands: MTLCommandQueue
-    private var client: VividSceneClient?
-    private var pending: VividSceneFrame?
+    private var client: VividRenderClient?
+    private var pending: VividRenderFrame?
     private var displayed: MTLTexture?
     private var rendering = false
     private var revision = 0
@@ -28,10 +29,11 @@ public final class SceneWallpaperView: MTKView, MTKViewDelegate {
     private var lastPointer: SIMD3<Double>?
     private var playbackPaused = false
 
-    public init(project: URL, assets: URL, muted: Bool, device: MTLDevice) throws {
+    public init(project: URL, assets: URL, muted: Bool, device: MTLDevice, web: Bool = false) throws {
+        serviceName = web ? "org.sceace.vivid.web" : "org.sceace.vivid.scene"
         self.project = project
         self.assets = assets
-        self.muted = muted
+        self.settings = PlaybackSettings(muted: muted)
         cache = try FileManager.default.url(
             for: .cachesDirectory, in: .userDomainMask,
             appropriateFor: nil, create: true
@@ -61,8 +63,8 @@ public final class SceneWallpaperView: MTKView, MTKViewDelegate {
         stop()
         configuredSize = drawableSize
         let activeRevision = revision
-        let client = VividSceneClient(
-            device: device,
+        let client = VividRenderClient(
+            device: device, serviceName: serviceName,
             onFrame: { [weak self] frame in
                 guard let self, self.revision == activeRevision else {
                     frame.releaseFrame()
@@ -78,9 +80,10 @@ public final class SceneWallpaperView: MTKView, MTKViewDelegate {
                 self.onFailure?(ScenePlaybackError(reason))
             })
         self.client = client
+        sendSettings()
         client.startProject(
             project, assets: assets, cache: cache,
-            width: UInt(drawableSize.width), height: UInt(drawableSize.height), muted: muted)
+            width: UInt(drawableSize.width), height: UInt(drawableSize.height), muted: settings.muted)
         if playbackPaused { client.setPaused(true) }
         pointerTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.samplePointer() }
@@ -110,6 +113,22 @@ public final class SceneWallpaperView: MTKView, MTKViewDelegate {
         guard pointer != lastPointer else { return }
         lastPointer = pointer
         client?.sendPointerX(x, y: y, left: left)
+    }
+
+    public func apply(_ settings: PlaybackSettings) {
+        self.settings = settings
+        sendSettings()
+    }
+
+    private func sendSettings() {
+        do {
+            let properties = try JSONSerialization.jsonObject(with: settings.properties)
+            let data = try JSONSerialization.data(withJSONObject: [
+                "muted": settings.muted, "volume": settings.volume, "fit": settings.fit,
+                "fps": settings.fps, "properties": properties,
+            ])
+            client?.configure(withSettings: data)
+        } catch { onFailure?(error) }
     }
 
     public func setPaused(_ paused: Bool) {

@@ -8,46 +8,67 @@ final class WallpaperWindow: NSWindow {
     override var canBecomeMain: Bool { false }
 }
 
+@MainActor
 final class WallpaperWindowController: NSWindowController {
-    private let wallpaperView: MTKView
-    private let sceneView: SceneWallpaperView?
-    let muted: Bool
+    private let wallpaperView: NSView
+    private let sceneView: RenderServiceView?
+    private let videoView: VideoWallpaperView?
+    private var readiness: CheckedContinuation<Void, Error>?
+    private var readinessTimeout: Task<Void, Never>?
+    private(set) var failureMessage: String?
+    private var ready = false
+    private var stopped = false
+    private let onFailure: (Error) -> Void
+    let source: WallpaperSource
+    let project: WallpaperProject?
     private(set) var completedFrames = 0
 
     init(
-        screen: NSScreen, source: WallpaperSource, assetsURL: URL?, muted: Bool,
-        onFailure: @escaping (Error) -> Void
+        screen: NSScreen, source: WallpaperSource, project: WallpaperProject?, assetsURL: URL?,
+        settings: PlaybackSettings, onFailure: @escaping (Error) -> Void
     ) throws {
-        self.muted = muted
-        guard let device = MTLCreateSystemDefaultDevice() else {
-            throw PresentationError.resource("Metal device")
-        }
-        let wallpaperView: MTKView
+        self.source = source
+        self.project = project
+        self.onFailure = onFailure
         let diagnosticView: MetalWallpaperView?
-        if case .sceneProject(let project) = source {
-            guard let assetsURL else {
-                throw ScenePlaybackError("Specify the Wallpaper Engine assets directory with --assets.")
-            }
-            let scene = try SceneWallpaperView(
-                project: project, assets: assetsURL, muted: muted, device: device)
-            wallpaperView = scene
-            sceneView = scene
-            diagnosticView = nil
-        } else {
-            let diagnostic = try MetalWallpaperView(source: source, device: device)
-            wallpaperView = diagnostic
+        if let project, project.kind == .video {
+            let video = VideoWallpaperView(url: project.entry)
+            wallpaperView = video
+            videoView = video
             sceneView = nil
-            diagnosticView = diagnostic
-        }
-        self.wallpaperView = wallpaperView
+            diagnosticView = nil
 
+        } else {
+            guard let device = MTLCreateSystemDefaultDevice() else {
+                throw PresentationError.resource("Metal device")
+            }
+            videoView = nil
+            if let project {
+                guard
+                    project.kind == .web
+                        || (assetsURL != nil
+                            && FileManager.default.fileExists(
+                                atPath: assetsURL!.appendingPathComponent("shaders/common.h").path))
+                else {
+                    throw ProjectError(
+                        "Set the Wallpaper Engine assets directory in Settings, or use --assets.")
+                }
+                let scene = try RenderServiceView(
+                    project: project.contentDirectory, assets: assetsURL ?? project.contentDirectory,
+                    muted: settings.muted, device: device, web: project.kind == .web)
+                wallpaperView = scene
+                sceneView = scene
+                diagnosticView = nil
+            } else {
+                let diagnostic = try MetalWallpaperView(source: source, device: device)
+                wallpaperView = diagnostic
+                diagnosticView = diagnostic
+                sceneView = nil
+            }
+        }
         let window = WallpaperWindow(
-            contentRect: screen.frame,
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false,
-            screen: screen
-        )
+            contentRect: screen.frame, styleMask: [.borderless],
+            backing: .buffered, defer: false, screen: screen)
         window.isOpaque = true
         window.backgroundColor = .black
         window.hasShadow = false
@@ -58,32 +79,89 @@ final class WallpaperWindowController: NSWindowController {
         window.ignoresMouseEvents = true
         window.contentView = wallpaperView
         super.init(window: window)
-        diagnosticView?.onFailure = onFailure
-        diagnosticView?.onFrameCompleted = { [weak self] in self?.completedFrames += 1 }
-        sceneView?.onFailure = onFailure
-        sceneView?.onFrameCompleted = { [weak self] in self?.completedFrames += 1 }
+        diagnosticView?.onFailure = { [weak self] in self?.failed($0) }
+        diagnosticView?.onFrameCompleted = { [weak self] in self?.presented() }
+        sceneView?.onFailure = { [weak self] in self?.failed($0) }
+        sceneView?.onFrameCompleted = { [weak self] in self?.presented() }
+        videoView?.onReady = { [weak self] in self?.presented() }
+        videoView?.onFailure = { [weak self] in self?.failed($0) }
+        apply(settings)
         update(screen: screen)
     }
 
     @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
+    required init?(coder: NSCoder) { fatalError("Use init(screen:...)") }
+
+    func start(behind old: WallpaperWindowController?) async throws {
+        if let oldWindow = old?.window {
+            window?.order(.below, relativeTo: oldWindow.windowNumber)
+        } else {
+            window?.orderFrontRegardless()
+        }
+        setPaused(false)
+        if ready { return }
+        try await withCheckedThrowingContinuation { continuation in
+            readiness = continuation
+            readinessTimeout = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(30)) } catch { return }
+                self?.failed(ProjectError("Wallpaper did not produce its first frame within 30 seconds."))
+            }
+        }
+    }
+
+    private func presented() {
+        completedFrames += 1
+        ready = true
+        readinessTimeout?.cancel()
+        readinessTimeout = nil
+        readiness?.resume()
+        readiness = nil
+    }
+
+    private func failed(_ error: Error) {
+        guard !stopped else { return }
+        failureMessage = error.localizedDescription
+        readinessTimeout?.cancel()
+        readinessTimeout = nil
+        if let continuation = readiness {
+            readiness = nil
+            continuation.resume(throwing: error)
+        } else {
+            onFailure(error)
+        }
     }
 
     func update(screen: NSScreen) {
         window?.setFrame(screen.frame, display: false)
-        wallpaperView.drawableSize = CGSize(
-            width: screen.frame.width * screen.backingScaleFactor,
-            height: screen.frame.height * screen.backingScaleFactor
-        )
-        wallpaperView.needsDisplay = true
+        if let metalView = wallpaperView as? MTKView {
+            metalView.drawableSize = CGSize(
+                width: screen.frame.width * screen.backingScaleFactor,
+                height: screen.frame.height * screen.backingScaleFactor)
+            metalView.needsDisplay = true
+        }
         sceneView?.configure()
     }
 
+    func apply(_ settings: PlaybackSettings) {
+        sceneView?.apply(settings)
+        videoView?.apply(settings)
+    }
+
     override func close() {
+        stopped = true
+        readinessTimeout?.cancel()
+        readinessTimeout = nil
+        readiness?.resume(throwing: CancellationError())
+        readiness = nil
         sceneView?.stop()
+        videoView?.stop()
         super.close()
     }
 
-    func setPaused(_ paused: Bool) { sceneView?.setPaused(paused) }
+    func setPaused(_ paused: Bool) {
+        sceneView?.setPaused(paused)
+        videoView?.setPaused(paused)
+    }
+
+    var playbackTime: Double? { videoView?.playbackTime }
 }

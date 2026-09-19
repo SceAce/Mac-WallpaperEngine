@@ -4,6 +4,7 @@ public enum WallpaperSource: Equatable, Sendable {
     case diagnosticColor(red: Double, green: Double, blue: Double)
     case image(URL)
     case sceneProject(URL)
+    case project(URL)
 
     public static let diagnosticDefault = WallpaperSource.diagnosticColor(
         red: 0.035,
@@ -21,12 +22,19 @@ public struct LaunchOptions {
     public let probeDuration: TimeInterval?
     public let assetsURL: URL?
     public let muted: Bool
+    public let hasSource: Bool
+    public let libraryURL: URL?
+    public let configURL: URL?
+    public let openPanel: Bool
 
     public init(arguments: [String]) throws {
         var source: WallpaperSource?
         var duration: TimeInterval?
         var assets: URL?
         var muted = false
+        var library: URL?
+        var config: URL?
+        var panel = true
         var index = 1
         while index < arguments.count {
             let option = arguments[index]
@@ -34,19 +42,29 @@ public struct LaunchOptions {
             case "--mute":
                 muted = true
                 index += 1
+            case "--no-panel":
+                panel = false
+                index += 1
+            case "--library", "--config":
+                guard index + 1 < arguments.count else {
+                    throw WallpaperSourceError.missingValue(option: option)
+                }
+                let url = URL(fileURLWithPath: arguments[index + 1])
+                if option == "--library" { library = url } else { config = url }
+                index += 2
             case "--assets":
                 guard assets == nil, index + 1 < arguments.count else {
                     throw WallpaperSourceError.missingValue(option: option)
                 }
                 assets = URL(fileURLWithPath: arguments[index + 1], isDirectory: true)
                 index += 2
-            case "--image", "--scene":
+            case "--image", "--scene", "--project":
                 guard source == nil else { throw WallpaperSourceError.multipleSources }
                 guard index + 1 < arguments.count else {
                     throw WallpaperSourceError.missingValue(option: option)
                 }
                 let url = URL(fileURLWithPath: arguments[index + 1])
-                source = option == "--image" ? .image(url) : .sceneProject(url)
+                source = option == "--image" ? .image(url) : .project(url)
                 index += 2
             case "--diagnostic-color":
                 guard source == nil else { throw WallpaperSourceError.multipleSources }
@@ -72,6 +90,10 @@ public struct LaunchOptions {
                 throw WallpaperSourceError.unknownOption(option)
             }
         }
+        hasSource = source != nil
+        libraryURL = library
+        configURL = config
+        openPanel = panel
         self.source = source ?? .diagnosticDefault
         probeDuration = duration
         assetsURL = assets

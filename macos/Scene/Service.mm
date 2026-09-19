@@ -55,6 +55,8 @@ class Session : public std::enable_shared_from_this<Session> {
                     renderer_->pause();
                 else
                     renderer_->play();
+            } else if (operation == "configure" && renderer_) {
+                configure(message, false);
             } else if (operation == "stop") {
                 stop();
             } else {
@@ -76,6 +78,8 @@ class Session : public std::enable_shared_from_this<Session> {
     }
 
   private:
+    nlohmann::json property_definitions_;
+    nlohmann::json last_properties_;
     xpc_connection_t peer_;
     // The start request owns the asynchronous rendering transaction until teardown.
     // Retaining it also preserves the client's XPC importance donation while drawing.
@@ -120,6 +124,36 @@ class Session : public std::enable_shared_from_this<Session> {
         xpc_dictionary_set_string(message, "reason", reason.c_str());
         xpc_connection_send_message(peer_, message);
         stop();
+    }
+
+    void configure(xpc_object_t message, bool initial) {
+        size_t length = 0;
+        const auto* bytes = static_cast<const char*>(xpc_dictionary_get_data(message, "settings", &length));
+        if (!bytes)
+            return;
+        if (length > 1024 * 1024)
+            throw std::runtime_error("Scene settings exceed size limit");
+        const auto settings = nlohmann::json::parse(bytes, bytes + length);
+        const int fps = settings.value("fps", 30);
+        const int fit = settings.value("fit", 1);
+        const float volume = settings.value("volume", 1.0f);
+        if (fps < 5 || fps > 240 || fit < 1 || fit > 3 || !std::isfinite(volume) || volume < 0 || volume > 1)
+            throw std::runtime_error("Invalid scene playback settings");
+        renderer_->setPropertyInt32(wallpaper::PROPERTY_FPS, fps);
+        renderer_->setPropertyBool(wallpaper::PROPERTY_MUTED, settings.value("muted", false));
+        renderer_->setPropertyFloat(wallpaper::PROPERTY_VOLUME, volume);
+        const auto fill = fit == 1   ? wallpaper::FillMode::ASPECTCROP
+                          : fit == 2 ? wallpaper::FillMode::ASPECTFIT
+                                     : wallpaper::FillMode::STRETCH;
+        renderer_->setPropertyInt32(wallpaper::PROPERTY_FILLMODE, static_cast<int32_t>(fill));
+        const auto values = settings.value("properties", nlohmann::json::object());
+        if (initial || values != last_properties_) {
+            auto properties = vivid::scene::Project::parseProperties(property_definitions_, values);
+            renderer_->setPropertyObject(initial ? wallpaper::PROPERTY_LOAD_USER_PROPERTIES
+                                                 : wallpaper::PROPERTY_USER_PROPERTIES,
+                                         std::make_shared<wallpaper::UserPropertyMap>(std::move(properties)));
+            last_properties_ = values;
+        }
     }
 
     void start(xpc_object_t message) {
@@ -212,6 +246,8 @@ class Session : public std::enable_shared_from_this<Session> {
         renderer_->setPropertyString(wallpaper::PROPERTY_CACHE_PATH, string(message, "cache"));
         renderer_->setPropertyObject(wallpaper::PROPERTY_LOAD_USER_PROPERTIES,
                                      std::make_shared<wallpaper::UserPropertyMap>(project.properties));
+        property_definitions_ = project.property_definitions;
+        configure(message, true);
         renderer_->setPropertyString(wallpaper::PROPERTY_ASSETS, project.assets.string());
         renderer_->setPropertyString(wallpaper::PROPERTY_SOURCE, project.source.string());
         renderer_->play();

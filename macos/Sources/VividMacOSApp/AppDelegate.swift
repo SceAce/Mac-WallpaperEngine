@@ -2,8 +2,9 @@ import AppKit
 import VividMacOSCore
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var coordinator: WallpaperCoordinator?
+    private var webUI: WebUIService?
     private var statusItem: NSStatusItem?
     private let options: LaunchOptions
     private var probeTimer: Timer?
@@ -16,94 +17,103 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         do {
-            let environment = RuntimeEnvironment.current()
-            let failures = environment.validate()
+            let failures = RuntimeEnvironment.current().validate()
             guard failures.isEmpty else {
-                throw AppStartupError.requirements(failures)
+                throw ProjectError(failures.map(\.message).joined(separator: "\n"))
             }
-            coordinator = WallpaperCoordinator(
-                source: options.source, assetsURL: options.assetsURL, muted: options.muted
-            ) { [weak self] error in
-                self?.exitCode = EXIT_FAILURE
-                self?.presentStartupError(error)
-                NSApplication.shared.terminate(nil)
+            let coordinator = try WallpaperCoordinator(options: options) { [weak self] error in
+                self?.report(error)
             }
+            self.coordinator = coordinator
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
             item.button?.image = NSImage(systemSymbolName: "photo", accessibilityDescription: "Vivid")
             item.button?.toolTip = "Vivid"
             let menu = NSMenu()
-            if case .sceneProject = options.source {
-                let pause = menu.addItem(
-                    withTitle: "Pause", action: #selector(togglePlayback(_:)), keyEquivalent: "")
-                pause.target = self
-                pause.image = NSImage(systemSymbolName: "pause", accessibilityDescription: nil)
-                menu.addItem(.separator())
-            }
+            menu.delegate = self
+            let panel = menu.addItem(
+                withTitle: "打开壁纸面板 / Open Panel", action: #selector(openPanel), keyEquivalent: "")
+            panel.target = self
+            let pause = menu.addItem(
+                withTitle: "暂停 / Pause", action: #selector(togglePlayback(_:)), keyEquivalent: "")
+            pause.target = self
+            menu.addItem(.separator())
             menu.addItem(
-                withTitle: "Quit Vivid", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+                withTitle: "退出 Vivid / Quit", action: #selector(NSApplication.terminate(_:)),
+                keyEquivalent: "q")
             item.menu = menu
             statusItem = item
-            coordinator?.start()
-            if let duration = options.probeDuration {
-                probeTimer = Timer.scheduledTimer(withTimeInterval: duration, repeats: false) {
-                    [weak self] _ in
-                    Task { @MainActor [weak self] in
-                        guard let self else { return }
-                        let passed = self.coordinator?.validateProbe() == true
-                        self.exitCode = passed ? EXIT_SUCCESS : EXIT_FAILURE
-                        print(passed ? "PASS: desktop probe" : "FAIL: desktop probe")
-                        NSApplication.shared.terminate(nil)
+            if options.probeDuration == nil {
+                let webUI = WebUIService(
+                    coordinator: coordinator,
+                    onReady: { [weak self] url in
+                        if self?.options.openPanel == true { NSWorkspace.shared.open(url) }
+                    }, onFailure: { [weak self] in self?.report($0) })
+                self.webUI = webUI
+                try webUI.start()
+            }
+            Task {
+                await coordinator.start()
+                if let duration = options.probeDuration {
+                    probeTimer = Timer.scheduledTimer(withTimeInterval: duration, repeats: false) {
+                        [weak self] _ in
+                        Task { @MainActor [weak self] in
+                            guard let self else { return }
+                            let passed =
+                                self.coordinator?.validateProbe() == true && self.exitCode == EXIT_SUCCESS
+                            self.exitCode = passed ? EXIT_SUCCESS : EXIT_FAILURE
+                            print(passed ? "PASS: desktop probe" : "FAIL: desktop probe")
+                            NSApplication.shared.terminate(nil)
+                        }
                     }
                 }
             }
         } catch {
             exitCode = EXIT_FAILURE
-            presentStartupError(error)
+            report(error)
+            if options.probeDuration == nil {
+                let alert = NSAlert()
+                alert.alertStyle = .critical
+                alert.messageText = "Vivid startup error"
+                alert.informativeText = error.localizedDescription
+                alert.runModal()
+            }
             NSApplication.shared.terminate(nil)
         }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         probeTimer?.invalidate()
+        webUI?.stop()
         coordinator?.stop()
         if exitCode != EXIT_SUCCESS { exit(exitCode) }
     }
 
+    func menuWillOpen(_ menu: NSMenu) {
+        if let coordinator,
+            let playback = menu.items.first(where: { $0.action == #selector(togglePlayback(_:)) })
+        {
+            playback.title = coordinator.paused ? "继续 / Resume" : "暂停 / Pause"
+            statusItem?.button?.toolTip = coordinator.lastError.map { "Vivid: \($0)" } ?? "Vivid"
+        }
+    }
+
+    @objc private func openPanel() {
+        if let url = webUI?.url { NSWorkspace.shared.open(url) }
+    }
+
     @objc private func togglePlayback(_ item: NSMenuItem) {
         guard let coordinator else { return }
-        coordinator.setPaused(!coordinator.paused)
-        item.title = coordinator.paused ? "Resume" : "Pause"
-        item.image = NSImage(
-            systemSymbolName: coordinator.paused ? "play" : "pause", accessibilityDescription: nil)
+        Task {
+            do {
+                try await coordinator.apply(["playing": coordinator.paused])
+                item.title = coordinator.paused ? "继续 / Resume" : "暂停 / Pause"
+            } catch { report(error) }
+        }
     }
 
-    private func presentStartupError(_ error: Error) {
-        let message: String
-        if let startupError = error as? AppStartupError {
-            message = startupError.message
-        } else if let sourceError = error as? WallpaperSourceError {
-            message = sourceError.message
-        } else {
-            message = error.localizedDescription
-        }
-        FileHandle.standardError.write(Data("Vivid: \(message)\n".utf8))
-        guard options.probeDuration == nil else { return }
-        let alert = NSAlert()
-        alert.alertStyle = .critical
-        alert.messageText = "Vivid macOS cannot start"
-        alert.informativeText = message
-        alert.addButton(withTitle: "Quit")
-        alert.runModal()
-    }
-}
-
-private enum AppStartupError: Error {
-    case requirements([RuntimeRequirementFailure])
-
-    var message: String {
-        switch self {
-        case .requirements(let failures):
-            return failures.map(\.message).joined(separator: "\n")
-        }
+    private func report(_ error: Error) {
+        FileHandle.standardError.write(Data("Vivid: \(error.localizedDescription)\n".utf8))
+        statusItem?.button?.toolTip = "Vivid: \(error.localizedDescription)"
+        if options.probeDuration != nil { exitCode = EXIT_FAILURE }
     }
 }

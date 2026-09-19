@@ -1,0 +1,42 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Vivid CEF contract fixture</title>
+<style>
+  html,body { margin:0; width:100%; height:100%; overflow:hidden; background:#123; }
+  canvas { width:100%; height:100%; }
+</style>
+<canvas></canvas>
+<script>
+// A generated fixture, not a claim of Workshop web-wallpaper compatibility.
+var canvas = document.querySelector('canvas');
+var ctx = canvas.getContext('2d');
+var tint = 'rgb(38,128,230)', label = 'Vivid CEF', paused = false, phase = 0;
+var mouse = {x:0, y:0}, clicked = false;
+window.wallpaperPropertyListener = {
+  applyUserProperties: function(properties) {
+    if (properties.tint) {
+      var rgb = properties.tint.value.split(' ').map(function(n) { return Math.round(Number(n) * 255); });
+      tint = 'rgb(' + rgb.join(',') + ')';
+    }
+    if (properties.label) label = properties.label.value;
+  },
+  setPaused: function(value) { paused = value; }
+};
+window.addEventListener('mousemove', function(event) { mouse = {x:event.clientX, y:event.clientY}; });
+window.addEventListener('mousedown', function() { clicked = true; });
+function draw() {
+  canvas.width = innerWidth; canvas.height = innerHeight;
+  ctx.fillStyle = tint; ctx.fillRect(0, 0, innerWidth, innerHeight);
+  ctx.fillStyle = '#fff'; ctx.font = '80px sans-serif'; ctx.fillText(label, 80, 150);
+  ctx.fillRect(80 + Math.sin(phase) * 60, 220, 120, 120);
+  ctx.fillStyle = '#f55'; ctx.beginPath(); ctx.arc(mouse.x, mouse.y, 25, 0, Math.PI * 2); ctx.fill();
+  // A color ramp makes channel order/coverage visible in exported reference frames.
+  var gradient = ctx.createLinearGradient(0, 0, innerWidth, 0);
+  gradient.addColorStop(0, '#f00'); gradient.addColorStop(0.5, '#0f0'); gradient.addColorStop(1, '#00f');
+  ctx.fillStyle = gradient; ctx.fillRect(0, innerHeight - 40, innerWidth, 40);
+  ctx.fillStyle = clicked ? '#0f0' : '#f00'; ctx.fillRect(innerWidth - 40, 0, 40, 40);
+  if (!paused) phase += 0.04;
+  requestAnimationFrame(draw);
+}
+draw();
+</script>
