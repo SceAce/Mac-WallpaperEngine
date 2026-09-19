@@ -63,7 +63,7 @@
 
 ### 3.1 原生宿主与现有兼容核心分层
 
-采用 SwiftUI 管理界面、AppKit 桌面窗口、Metal 呈现；保留 C++ scene 兼容逻辑和 CEF JS bridge。macOS 运行协调器替代 Linux producer 的平台职责，不整体移植现有 daemon。首个实现阶段已建立 `macos/` SwiftPM 目标：运行时前置检查、每显示器桌面窗口、显示器热插拔/缩放同步代码、按需 Metal 呈现和静态图像诊断源。静态源不启用周期定时器；真实 scene 默认 30 FPS 的目标不变。`--scene` 会明确报告 backend 尚未接入。
+采用 SwiftUI 管理界面、AppKit 桌面窗口、Metal 呈现；保留 C++ scene 兼容逻辑和 CEF JS bridge。macOS 运行协调器替代 Linux producer 的平台职责，不整体移植现有 daemon。首个实现阶段已建立 `macos/` SwiftPM 目标：运行时前置检查、每显示器桌面窗口、显示器热插拔/缩放同步代码、按需 Metal 呈现和静态图像诊断源。静态源不启用周期定时器；真实 scene 默认 30 FPS 的目标不变。`--project` / `--scene` 现已按项目类型连接 scene、video 或 CEF 后端，见本文末尾的实现决策。
 
 原因是现有 daemon 同时拥有 DRM 设备、buffer 协商和 Linux 子进程控制。逐个添加 `#ifdef __APPLE__` 会让平台差异贯穿整个生命周期。新宿主只复用明确的业务契约与可提取算法。
 
@@ -464,3 +464,23 @@ P0 必须交付的可复核证据：
 5. 按第 12 节规范和阶段验收执行；新增平台代码集中在 `macos/` 与明确的 C++ 适配边界。
 
 上述范围决定已通过；当前 scene 已进入真实播放验证，其余能力仍按相应关卡推进，不一次性重写渲染器。验证若推翻关键假设，应修订本文中的决定及其后果，再进入对应实现阶段。
+
+## 2026-09-20：面板与多类型实现决策
+
+根据后续要求，管理界面改为复用原 Vivid WebUI。应用启动 Python 标准库 HTTP 后端，
+浏览器访问系统分配的 loopback 端口；后端通过继承的 stdin/stdout 管道请求原生协调器。
+Linux 原有 Unix socket 协议保留。原生端唯一负责配置持久化和播放状态，不另起 Linux daemon。
+
+配置事务先解析项目，等待候选播放器首帧，再原子保存并替换旧窗口。候选播放阶段静音，
+避免切换时双重音频。失败保留旧选择。显示器使用稳定 UUID，采用一屏一会话。
+暂停/音量/属性等设置更新现有会话。轮换按排序索引或随机非当前项目选择，按用户间隔触发，
+不在渲染帧循环中扫描文件。`dependency` 采用带访问集合和深度上限的递归解析，属性覆盖顺序为
+基础默认值 → 依赖预设 → 当前预设 → 用户保存值；只有文件类属性才按预设目录解析。
+
+Video 首版使用应用内 AVQueuePlayer、AVPlayerLooper 和 AVPlayerLayer。AVFoundation 管理媒体时间、
+解码和呈现，避免为成熟的媒体播放路径重复实现 XPC 帧队列；相应调整原图中的 Video 服务规划。
+
+Web 已验证可在 `RunLoopType=NSRunLoop` 的 application XPC 服务内运行 CEF，无需额外常驻宿主。
+标准 Chromium 子进程仍使用 bundle 内 Helper app。加速 IOSurface 在 CEF 回调有效期内复制到拥有的帧池，
+等待 GPU 完成后发布；共享 scene 的帧租约和 Metal 呈现，提供 BGRA/RGBA 格式区分。
+细节见 `macos/Web/CONTRACT.md`。当前使用开发签名、关闭 Chromium 沙箱，不等同发行版安全与分发验收。
