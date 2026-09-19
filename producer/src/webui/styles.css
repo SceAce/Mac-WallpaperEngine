@@ -2142,3 +2142,6 @@ pre {
 .custom-select-option.is-active {
   background: var(--accent-10);
 }
+
+/* Capability filtering must win over component display declarations. */
+.setting-row[hidden] { display: none; }

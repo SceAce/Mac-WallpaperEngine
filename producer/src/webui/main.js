@@ -208,6 +208,9 @@ const TRANSLATIONS = {
     'settingOption.content-fit.1': 'Cover',
     'settingOption.content-fit.2': 'Fill',
     'settingOption.content-fit.3': 'Stretch',
+    'setting.assets-path.name': 'Wallpaper Engine Assets',
+    'setting.assets-path.note': 'Original Wallpaper Engine assets directory',
+    'setting.playing.name': 'Play Wallpaper',
     'settingOption.multi-display-mode.clone': 'Clone single monitor',
     'settingOption.multi-display-mode.independent': 'Wallpaper per monitor',
     'settingOption.applicationRule.condition.0': 'Running',
@@ -390,6 +393,9 @@ const TRANSLATIONS = {
     'settingOption.content-fit.1': '覆盖',
     'settingOption.content-fit.2': '填充',
     'settingOption.content-fit.3': '拉伸',
+    'setting.assets-path.name': 'Wallpaper Engine 公共资源',
+    'setting.assets-path.note': '原始安装中的 assets 目录',
+    'setting.playing.name': '播放壁纸',
     'settingOption.multi-display-mode.clone': '复制单个显示器',
     'settingOption.multi-display-mode.independent': '每屏独立壁纸',
     'settingOption.applicationRule.condition.0': '运行中',
@@ -748,6 +754,8 @@ function applyGfxQualityPreset(name) {
 }
 
 const SETTINGS = [
+  {section: 'general', key: 'assets-path', name: 'Wallpaper Engine Assets', note: 'Original Wallpaper Engine assets directory', type: 'text', platforms: ['macos'], debounce: 650},
+  {section: 'general', key: 'playing', name: 'Play Wallpaper', type: 'boolean', platforms: ['macos']},
   {
     section: 'general',
     key: 'change-wallpaper-directory-path',
@@ -1091,17 +1099,26 @@ const allowedMarkupAttributes = {
 };
 
 async function requestJson(path, options = {}) {
-  const response = await fetch(path, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.headers ?? {}),
-    },
-  });
-  const payload = await response.json();
-  if (!response.ok || !payload.ok)
-    throw new Error(payload.error ?? `HTTP ${response.status}`);
-  return payload;
+  const mutation = options.method === 'POST';
+  if (mutation) app.pendingMutations = (app.pendingMutations ?? 0) + 1;
+  try {
+    const response = await fetch(path, {
+      ...options,
+      headers: {'Content-Type': 'application/json', ...(options.headers ?? {})},
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok)
+      throw new Error(payload.error ?? `HTTP ${response.status}`);
+    if (payload.control?.opcode === 12 || payload.control?.payload?.ok === false)
+      throw new Error(payload.control.payload.message ?? 'Wallpaper control failed');
+    if (payload.control?.payload?.global) {
+      app.state = payload.control.payload;
+      app.global = app.state.global;
+    }
+    return payload;
+  } finally {
+    if (mutation) app.pendingMutations--;
+  }
 }
 
 function controlPayload(response) {
@@ -1172,6 +1189,10 @@ function settingName(definition) {
 }
 
 function settingNote(definition) {
+  if (app.state?.capabilities?.platform === 'macos' && definition.key === 'scene-fps')
+    return app.locale === 'zh-CN' ? '场景 5–240 FPS，网页最高 60 FPS；视频使用原始帧率' : 'Scene: 5–240 FPS; web: up to 60 FPS; video keeps its media rate';
+  if (app.state?.capabilities?.platform === 'macos' && definition.key === 'content-fit')
+    return app.locale === 'zh-CN' ? '作用于场景和视频；网页按屏幕尺寸布局' : 'Scene and video scaling; web pages lay out at the screen size';
   if (!definition.note)
     return '';
   return tFallback(`setting.${definition.key}.note`, definition.note);
@@ -1723,6 +1744,7 @@ function applySettingControlValue(definition, value) {
 }
 
 async function sendConfigPatch(patch, afterSave = null) {
+  const previous = cloneJson(app.global);
   Object.assign(app.global, patch);
   if (GFX_QUALITY_BUNDLE_KEYS.some(key => Object.prototype.hasOwnProperty.call(patch, key)))
     syncGfxQualityControl();
@@ -1736,6 +1758,9 @@ async function sendConfigPatch(patch, afterSave = null) {
     setLocalizedStatus('status.saved', 'ok');
     afterSave?.();
   } catch (error) {
+    app.global = previous;
+    populateSettings();
+    renderDisplayModal();
     setStatus(error.message, 'error');
   }
 }
@@ -1873,7 +1898,7 @@ function updateEmptySettingSections() {
       section.classList.remove('is-empty');
       return;
     }
-    const hasRows = Boolean(section.querySelector('.setting-row'));
+    const hasRows = [...section.querySelectorAll('.setting-row')].some(row => !row.hidden);
     const hasDetails = Boolean(section.querySelector('.state-details'));
     section.classList.toggle('is-empty', !hasRows && !hasDetails);
   });
@@ -1895,6 +1920,14 @@ function updateSettingTexts() {
 }
 
 function populateSettings() {
+  const capabilities = app.state?.capabilities;
+  for (const {definition, control} of app.settingControls.values()) {
+    const supported = (!definition.platforms || definition.platforms.includes(capabilities?.platform))
+      && (!capabilities?.settings || capabilities.settings.includes(definition.key));
+    control.closest('.setting-row').hidden = !supported;
+  }
+  updateEmptySettingSections();
+  updateSettingTexts();
   app.populatingSettings = true;
   for (const definition of SETTINGS) {
     const value = definition.persist === false && typeof definition.currentValue === 'function'
@@ -2440,6 +2473,10 @@ function closeDisplayMenus() {
 function syncDisplayModeSelect() {
   if (!dom.displayModeSelect)
     return;
+  for (const option of dom.displayModeSelect.options) {
+    option.disabled = Boolean(app.state?.capabilities?.displayModes
+      && !app.state.capabilities.displayModes.includes(option.value));
+  }
   dom.displayModeSelect.value = multiDisplayMode();
   const wrapper = dom.displayModeSelect.closest('.custom-select');
   const text = wrapper?.querySelector('.custom-select-trigger-text');
@@ -2875,6 +2912,7 @@ function hexToColorString(hex, defaultValue) {
 }
 
 async function sendWallpaperProperties() {
+  const previous = cloneJson(app.global);
   if (!app.selectedProject)
     return;
   const payload = buildUserPropertyPayload(app.selectedProject, app.selectedOverrides);
@@ -2893,6 +2931,8 @@ async function sendWallpaperProperties() {
     });
     setLocalizedStatus('status.propertiesApplied', 'ok');
   } catch (error) {
+    app.global = previous;
+    syncSelectedProjectFromState();
     setStatus(error.message, 'error');
   }
 }
@@ -3116,6 +3156,7 @@ function updateActiveProjectCard(projectPath = activeProjectPath()) {
 }
 
 async function selectProject(project, {openInspector = false} = {}) {
+  const previous = cloneJson(app.global);
   const displayKey = outputDisplayKey(wallpaperTargetOutput());
 
   app.selectedProject = project;
@@ -3142,6 +3183,8 @@ async function selectProject(project, {openInspector = false} = {}) {
     setLocalizedStatus('status.wallpaperSelected', 'ok');
     populateSettings();
   } catch (error) {
+    app.global = previous;
+    syncSelectedProjectFromState();
     setStatus(error.message, 'error');
   }
 }
@@ -3406,7 +3449,8 @@ async function refreshState({projects = false} = {}) {
     renderDisplayModal();
     if (app.projects.length > 0)
       syncSelectedProjectFromState();
-    setLocalizedStatus('status.connected', 'ok');
+    if (app.state.lastError) setStatus(app.state.lastError, 'error');
+    else setLocalizedStatus('status.connected', 'ok');
     if (projects)
       await refreshProjects();
   } catch (error) {
@@ -3447,7 +3491,8 @@ async function refreshProjects() {
     renderProjects();
     renderInspector();
     renderDisplayModal();
-    setLocalizedStatus('status.loadedWallpapers', 'ok', {count: app.projects.length});
+    if (app.state?.lastError) setStatus(app.state.lastError, 'error');
+    else setLocalizedStatus('status.loadedWallpapers', 'ok', {count: app.projects.length});
   } catch (error) {
     setStatus(error.message, 'error');
     app.projects = prepareProjects([]);
@@ -3735,3 +3780,12 @@ enhanceAllSelects();
 installEventHandlers();
 refreshLocalizedUi();
 refreshState({projects: true});
+
+// Synchronize changes made from the menu bar or automatic wallpaper rotation.
+window.setInterval(() => {
+  if (app.state?.capabilities?.platform !== 'macos' || document.hidden || app.pendingMutations || app.propertyTimer)
+    return;
+  if (document.activeElement?.matches('input, textarea, select'))
+    return;
+  refreshState();
+}, 3000);

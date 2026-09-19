@@ -7,6 +7,8 @@ import os
 import pathlib
 import socket
 import struct
+import sys
+import threading
 import time
 import urllib.parse
 import urllib.error
@@ -24,6 +26,7 @@ from vivid_protocol_constants import (
     VIVID_DISPLAY_CONTROL_HEADER_BYTES as CONTROL_HEADER_BYTES,
     VIVID_DISPLAY_CONTROL_SET_CONTENT_FIT as CONTROL_SET_CONTENT_FIT,
     VIVID_DISPLAY_CONTROL_SET_MUTED as CONTROL_SET_MUTED,
+    VIVID_DISPLAY_CONTROL_SET_PLAYING as CONTROL_SET_PLAYING,
     VIVID_DISPLAY_CONTROL_SET_SCENE_FPS as CONTROL_SET_SCENE_FPS,
     VIVID_DISPLAY_CONTROL_SET_STATE as CONTROL_SET_STATE,
     VIVID_DISPLAY_CONTROL_SET_VOLUME as CONTROL_SET_VOLUME,
@@ -41,6 +44,7 @@ from vivid_protocol_constants import (
 
 CONTROL_ACTIONS = {
     "getState": CONTROL_GET_STATE,
+    "setPlaying": CONTROL_SET_PLAYING,
     "setMuted": CONTROL_SET_MUTED,
     "setVolume": CONTROL_SET_VOLUME,
     "setContentFit": CONTROL_SET_CONTENT_FIT,
@@ -489,6 +493,8 @@ def resolve_legacy_project_type(manifest):
         return "scene"
     if entry.endswith((".html", ".htm")):
         return "web"
+    if entry.endswith((".mp4", ".mov", ".m4v", ".webm")):
+        return "video"
     return None
 
 
@@ -672,10 +678,37 @@ def directory_modified_time(path):
         return 0
 
 
-def load_project(project_dir):
+def load_project(project_dir, visited=None):
+    root = pathlib.Path(project_dir).resolve()
+    visited = set() if visited is None else visited
+    if str(root) in visited or len(visited) >= 16:
+        return None
+    visited = visited | {str(root)}
     manifest = read_project_json(project_dir)
     if manifest is None:
         return None
+    if isinstance(manifest.get("preset"), dict) and str(manifest.get("dependency", "")).isdigit():
+        base = load_project(root.parent / str(manifest["dependency"]), visited)
+        if base is None:
+            return None
+        base.update({
+            "path": str(root), "basename": root.name,
+            "title": manifest.get("title") or root.name,
+            "description": manifest.get("description", ""),
+            "previewPath": resolve_preview_file(root, manifest),
+            "configId": resolve_project_config_id(str(root), manifest),
+            "dependency": manifest["dependency"],
+            "updatedTime": int(directory_modified_time(root)),
+        })
+        for prop in base["sceneProperties"]:
+            if prop["name"] in manifest["preset"] and manifest["preset"][prop["name"]] is not None:
+                value = manifest["preset"][prop["name"]]
+                if prop["type"] in ("file", "directory", "scenetexture") and isinstance(value, str) and value:
+                    candidate = (root / value).resolve()
+                    if candidate.is_relative_to(root) and candidate.exists():
+                        value = str(candidate)
+                prop["defaultValue"] = normalize_scene_property_value(prop["type"], value)
+        return base
     project_type = resolve_project_type(manifest)
     if not project_type:
         return None
@@ -753,6 +786,21 @@ def validate_remote_image_url(url):
 
 
 class VividWebUIHandler(BaseHTTPRequestHandler):
+    def _control(self, opcode, payload=None):
+        return self.server.control(opcode, payload)
+
+    def _check_native_origin(self):
+        if not getattr(self.server, "native", False):
+            return True
+        expected = f"127.0.0.1:{self.server.server_port}"
+        origin = self.headers.get("Origin")
+        if (self.headers.get("Host") != expected
+                or (origin and origin != f"http://{expected}")
+                or self.headers.get("Sec-Fetch-Site") == "cross-site"):
+            self._send_json(403, {"ok": False, "error": "The panel accepts same-origin local requests only"})
+            return False
+        return True
+
     server_version = "VividWebUI/0.1"
 
     def _send_json(self, status, payload):
@@ -767,7 +815,14 @@ class VividWebUIHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0") or "0")
         if length <= 0:
             return {}
-        return json.loads(self.rfile.read(length).decode("utf-8"))
+        if length > 1024 * 1024:
+            raise ValueError("request exceeds 1 MiB")
+        if self.headers.get_content_type() != "application/json":
+            raise ValueError("Content-Type must be application/json")
+        value = json.loads(self.rfile.read(length).decode("utf-8"))
+        if not isinstance(value, dict):
+            raise ValueError("request must be a JSON object")
+        return value
 
     def _serve_static(self):
         request_path = urllib.parse.urlparse(self.path).path
@@ -843,16 +898,18 @@ class VividWebUIHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _producer_state(self):
-        control = producer_control(self.server.socket_path, CONTROL_GET_STATE)
+        control = self._control(CONTROL_GET_STATE)
         payload = response_payload(control)
         return control, payload
 
     def do_GET(self):
+        if not self._check_native_origin():
+            return
         request_path, query = parse_query(self.path)
 
         if request_path == "/api/state":
             try:
-                control = producer_control(self.server.socket_path, CONTROL_GET_STATE)
+                control = self._control(CONTROL_GET_STATE)
                 self._send_json(200, {"ok": True, "control": control})
             except Exception as error:
                 self._send_json(502, {"ok": False, "error": str(error)})
@@ -903,12 +960,18 @@ class VividWebUIHandler(BaseHTTPRequestHandler):
         self._serve_static()
 
     def do_POST(self):
+        if not self._check_native_origin():
+            return
+        with self.server.mutation_lock:
+            self._post()
+
+    def _post(self):
         request_path, _query = parse_query(self.path)
 
         if request_path == "/api/config":
             try:
                 payload = self._read_json_body()
-                control = producer_control(self.server.socket_path, CONTROL_SET_STATE, payload)
+                control = self._control(CONTROL_SET_STATE, payload)
                 self._send_json(200, {"ok": True, "control": control})
             except Exception as error:
                 self._send_json(502, {"ok": False, "error": str(error)})
@@ -954,10 +1017,9 @@ class VividWebUIHandler(BaseHTTPRequestHandler):
                     f"display={target_key} project={project_path} "
                     f"properties-source={properties_source} "
                     f"count={property_payload_count(properties)}",
-                    flush=True,
+                    flush=True, file=sys.stderr,
                 )
-                control = producer_control(
-                    self.server.socket_path,
+                control = self._control(
                     CONTROL_SET_STATE,
                     wallpaper_select_patch(
                         state,
@@ -980,8 +1042,7 @@ class VividWebUIHandler(BaseHTTPRequestHandler):
                 if not target_key:
                     raise ValueError("No display output is available for wallpaper removal")
 
-                control = producer_control(
-                    self.server.socket_path,
+                control = self._control(
                     CONTROL_SET_STATE,
                     per_output_projects_remove_patch(state, target_key),
                 )
@@ -1011,10 +1072,9 @@ class VividWebUIHandler(BaseHTTPRequestHandler):
                     "VividWebUI: wallpaper properties "
                     f"display={target_key} project={project_path} "
                     f"count={property_payload_count(properties)}",
-                    flush=True,
+                    flush=True, file=sys.stderr,
                 )
-                control = producer_control(
-                    self.server.socket_path,
+                control = self._control(
                     CONTROL_SET_STATE,
                     wallpaper_properties_patch(
                         state,
@@ -1041,7 +1101,7 @@ class VividWebUIHandler(BaseHTTPRequestHandler):
                         for key, value in request.items()
                         if key not in ("action", "opcode", "payload")
                     }
-                control = producer_control(self.server.socket_path, opcode, payload)
+                control = self._control(opcode, payload)
                 self._send_json(200, {"ok": True, "control": control})
             except Exception as error:
                 self._send_json(502, {"ok": False, "error": str(error)})
@@ -1057,15 +1117,32 @@ def main():
     parser = argparse.ArgumentParser(description="Vivid producer WebUI socket bridge")
     parser.add_argument("--host", default=os.environ.get("VIVID_WEBUI_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("VIVID_WEBUI_PORT", "8765")))
+    parser.add_argument("--native-stdio", action="store_true")
     parser.add_argument("--socket", default=default_socket_path())
     parser.add_argument("--web-root", default=str(pathlib.Path(__file__).resolve().parent))
     args = parser.parse_args()
 
+    if args.native_stdio and args.host != "127.0.0.1":
+        parser.error("native mode requires loopback host 127.0.0.1")
     httpd = ThreadingHTTPServer((args.host, args.port), VividWebUIHandler)
+    httpd.daemon_threads = True
+    httpd.native = args.native_stdio
+    httpd.mutation_lock = threading.Lock()
+    if args.native_stdio:
+        from vivid_native_control import NativeControl
+        httpd.control = NativeControl(httpd.shutdown)
+    else:
+        httpd.control = lambda opcode, payload=None: producer_control(args.socket, opcode, payload)
     httpd.socket_path = args.socket
     httpd.web_root = args.web_root
-    print(f"VividWebUI: http://{args.host}:{args.port}", flush=True)
-    httpd.serve_forever()
+    if args.native_stdio:
+        httpd.control.send({"event": "ready", "url": f"http://127.0.0.1:{httpd.server_port}"})
+    else:
+        print(f"VividWebUI: http://{args.host}:{httpd.server_port}", flush=True)
+    try:
+        httpd.serve_forever()
+    finally:
+        httpd.server_close()
 
 
 if __name__ == "__main__":
