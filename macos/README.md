@@ -25,8 +25,10 @@ MoltenVK/CEF downloads. Builds never patch dependency sources. **This ad hoc sig
 development bundle still requires local Python, Homebrew, DXC and MoltenVK. CEF's
 Chromium sandbox is not enabled; release packaging and notarization remain pending.**
 
-The browser panel and menu-bar Open Panel action use an automatically allocated
-loopback port. Quitting the app closes its Python backend. `--no-panel` suppresses
+The browser panel defaults to `http://127.0.0.1:8765`; the menu-bar Open Panel action
+opens the same address. Set `VIVID_WEBUI_PORT` in the app's launch environment to
+override the port. If the port is occupied, the backend reports a startup error.
+Quitting the app closes its Python backend. `--no-panel` suppresses
 automatic browser opening. Configuration is atomically saved under
 `~/Library/Application Support/org.sceace.vivid/config.json`; `--config <file>`
 selects an isolated configuration. Double-clicking the app restores saved wallpapers.

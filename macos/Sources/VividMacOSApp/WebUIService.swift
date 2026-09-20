@@ -36,7 +36,7 @@ final class WebUIService {
             throw ProjectError("Python 3 is required for the Vivid panel.")
         }
         process.executableURL = URL(fileURLWithPath: python)
-        process.arguments = ["-u", script.path, "--native-stdio", "--port", "0"]
+        process.arguments = ["-u", script.path, "--native-stdio"]
         process.standardInput = input
         process.standardOutput = output
         process.standardError = FileHandle.standardError

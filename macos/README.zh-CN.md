@@ -32,8 +32,9 @@ macos/.build/Vivid.app/Contents/MacOS/vivid-macos \
   --assets /Volumes/disk4s2/source/.local/share/Steam/steamapps/common/wallpaper_engine/assets
 ```
 
-之后双击 `Vivid.app` 即可恢复保存的配置。面板地址是终端输出的 `http://127.0.0.1:<端口>`，
-端口由系统分配；也可从菜单栏选择“打开壁纸面板”。应用退出时关闭面板后端。
+之后双击 `Vivid.app` 即可恢复保存的配置。面板默认地址为 `http://127.0.0.1:8765`，
+也可从菜单栏选择“打开壁纸面板”。如需修改端口，可在应用启动环境中设置 `VIVID_WEBUI_PORT`；
+端口被占用时，后端会报告启动错误。应用退出时关闭面板后端。
 `--no-panel` 只禁止自动打开浏览器，后端仍可通过菜单栏访问。
 
 面板可浏览、搜索、筛选和排序壁纸，按显示器选择/移除项目，编辑并保存用户属性；
