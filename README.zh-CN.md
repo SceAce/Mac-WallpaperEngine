@@ -2,6 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
+源项目：<https://github.com/ayasa520/Vivid>
 面向 **Apple Silicon（M 系列）、macOS 26+** 的 Wallpaper Engine 播放器。
 本仓库基于 [ayasa520/Vivid](https://github.com/ayasa520/Vivid)，维护 macOS 原生应用、
 Vivid scene 兼容核心、原 WebUI 和 CEF JavaScript bridge。

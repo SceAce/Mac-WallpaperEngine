@@ -2,6 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
+Source ProJect: <https://github.com/ayasa520/Vivid>
 Wallpaper Engine player for **Apple Silicon (M series), macOS 26+**. This fork of
 [ayasa520/Vivid](https://github.com/ayasa520/Vivid) maintains the native macOS app,
 Vivid scene compatibility core, original WebUI and CEF JavaScript bridge.
