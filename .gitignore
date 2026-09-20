@@ -1,8 +1,6 @@
-# Hanabi extension
-src/video.*
+# Local build products
 .build
-src/schemas/gschemas.compiled
-src/native/scene/build/
+.DS_Store
 
 # Logs
 logs
@@ -29,10 +27,6 @@ node_modules/
 .yarn/install-state.gz
 .pnp.*
 
-# Translation binaries
-*.mo
-
-producer/packaging/flatpak/sources
 CLAUDE.md
 AGENTS.md
 .claude

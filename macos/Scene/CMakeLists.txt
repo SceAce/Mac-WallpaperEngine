@@ -18,7 +18,6 @@ set(Vulkan_LIBRARY "${VIVID_MOLTENVK_ROOT}/dynamic/dylib/macOS/libMoltenVK.dylib
     CACHE FILEPATH "Vulkan implementation")
 set(HANABI_BUILD_VENDORED_DXC OFF CACHE BOOL "Use the separately built pinned DXC")
 set(HANABI_DXC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.build/dxc-stage" CACHE PATH "DXC SDK")
-set(BUILD_QML OFF CACHE BOOL "No Qt host on macOS")
 set(CMAKE_BUILD_RPATH "${VIVID_MOLTENVK_ROOT}/dynamic/dylib/macOS;${HANABI_DXC_ROOT}/lib")
 add_subdirectory("../../producer/third_party/wallpaper-scene-renderer" renderer)
 add_executable(VividSceneService MACOSX_BUNDLE Service.mm Project.cpp)

@@ -36,17 +36,17 @@
 | 事实 | 依据 | 对移植的影响 |
 | --- | --- | --- |
 | scene gitlink 及全部递归子模块已恢复 | [溯源与恢复结果](scene-source-investigation.zh-CN.md)：原快照 226 个普通文件与上游一致，scene 固定 `0986aa4e...`，共 12 个依赖仓库引用匹配且工作树干净 | 保持固定基线；接下来验证平台构建和运行等价性 |
-| scene 输出指定 DMA-BUF | [`vivid_scene_producer.cpp`](../producer/src/renderers/scene/vivid_scene_producer.cpp)，`prepare_buffers` / `RenderInitInfo` | 需要新增输出后端，不能只新增桌面 consumer |
+| scene 输出指定 DMA-BUF | [`vivid_scene_producer.cpp`](https://github.com/SceAce/Mac-WallpaperEngine/blob/09806ee606cd7f918c38625d541f48f5fddd23e9/producer/src/renderers/scene/vivid_scene_producer.cpp)，`prepare_buffers` / `RenderInitInfo` | 需要新增输出后端，不能只新增桌面 consumer |
 | 核心有外部交换链工厂，但返回类型仍依赖 Linux 句柄 | 固定核心中的 `SceneWallpaperSurface.hpp`、`VulkanExSwapchain.hpp` 和 `ExSwapchain.hpp` | 在设备、资源表示和同步契约处重构；只换工厂回调不足以支持 IOSurface |
 | 核心强制 geometry shader，粒子/rope 实际使用 | 核心 `Device.cpp`、`WPSceneParserParticle.cpp`；[MoltenVK 能力核查](scene-source-investigation.zh-CN.md) | 原实现无法直接在 MoltenVK 初始化；需设计等价的粒子几何展开并验证效果 |
-| 进程与同步依赖 Linux | [`vivid_renderer_host.c`](../producer/src/renderer_host/vivid_renderer_host.c)、[`vivid_renderer_release_timeline.c`](../producer/src/renderer_host/vivid_renderer_release_timeline.c)、[`vivid_renderer_transport.c`](../producer/src/renderer_host/vivid_renderer_transport.c) | eventfd、prctl、DRM syncobj 和当前 socket 标志均需平台实现 |
-| 现有协议携带 Linux 图形语义 | [renderer 协议](renderer-protocol-reference.md)、[display 协议](protocols-reference.md) | 复用控制语义；macOS 帧传输另设有版本的协议，不伪造 DRM 字段 |
-| scene 查找固定 Steam assets 目录 | [`vivid_scene_project.hpp`](../producer/src/renderers/scene/vivid_scene_project.hpp)，`resolve_assets_path` | 应显式配置资源根目录 |
-| scene 与 web 的输入能力不同 | [scene manifest](../producer/src/renderers/scene/vivid-scene.renderer.json)、[web manifest](../producer/src/renderers/web/vivid-web.renderer.json) | 按能力路由事件；不能假设 scene 支持滚轮或全部按钮 |
-| web 有现成兼容桥 | [`vivid_web_bridge_js.h`](../producer/src/renderers/web/vivid_web_bridge_js.h) | 保留属性、暂停、音频和媒体回调语义 |
-| web 初始化采用 Linux 运行方式 | [`vivid_web_producer.cpp`](../producer/src/renderers/web/vivid_web_producer.cpp) | macOS 主循环、helper bundle、沙箱和纹理路径需重新设计 |
-| 视频依赖 GStreamer CUDA/VA/DRM | [video CMake](../producer/src/renderers/video/CMakeLists.txt) | 替换解码与输出后端，不把这些 Linux 依赖带到 Mac |
-| 音频频谱已有特定兼容算法 | [`vivid_media_bridge.cpp`](../consumer/kde/src/qml_module/vivid_media_bridge.cpp)、[`display-helper.js`](../consumer/gnome/extension/shell/helper/display-helper.js) | 移植现有 Bluestein 与频带映射，不能直接换成常见的 Hann 窗 FFT |
+| 进程与同步依赖 Linux | [`vivid_renderer_host.c`](https://github.com/SceAce/Mac-WallpaperEngine/blob/09806ee606cd7f918c38625d541f48f5fddd23e9/producer/src/renderer_host/vivid_renderer_host.c)、[`vivid_renderer_release_timeline.c`](https://github.com/SceAce/Mac-WallpaperEngine/blob/09806ee606cd7f918c38625d541f48f5fddd23e9/producer/src/renderer_host/vivid_renderer_release_timeline.c)、[`vivid_renderer_transport.c`](https://github.com/SceAce/Mac-WallpaperEngine/blob/09806ee606cd7f918c38625d541f48f5fddd23e9/producer/src/renderer_host/vivid_renderer_transport.c) | eventfd、prctl、DRM syncobj 和当前 socket 标志均需平台实现 |
+| 现有协议携带 Linux 图形语义 | [renderer 协议](https://github.com/SceAce/Mac-WallpaperEngine/blob/09806ee606cd7f918c38625d541f48f5fddd23e9/docs/renderer-protocol-reference.md)、[display 协议](https://github.com/SceAce/Mac-WallpaperEngine/blob/09806ee606cd7f918c38625d541f48f5fddd23e9/docs/protocols-reference.md) | 复用控制语义；macOS 帧传输另设有版本的协议，不伪造 DRM 字段 |
+| scene 查找固定 Steam assets 目录 | [`vivid_scene_project.hpp`](https://github.com/SceAce/Mac-WallpaperEngine/blob/09806ee606cd7f918c38625d541f48f5fddd23e9/producer/src/renderers/scene/vivid_scene_project.hpp)，`resolve_assets_path` | 应显式配置资源根目录 |
+| scene 与 web 的输入能力不同 | [scene manifest](https://github.com/SceAce/Mac-WallpaperEngine/blob/09806ee606cd7f918c38625d541f48f5fddd23e9/producer/src/renderers/scene/vivid-scene.renderer.json)、[web manifest](https://github.com/SceAce/Mac-WallpaperEngine/blob/09806ee606cd7f918c38625d541f48f5fddd23e9/producer/src/renderers/web/vivid-web.renderer.json) | 按能力路由事件；不能假设 scene 支持滚轮或全部按钮 |
+| web 有现成兼容桥 | [`vivid_web_bridge_js.h`](../macos/Web/vivid_web_bridge_js.h) | 保留属性、暂停、音频和媒体回调语义 |
+| web 初始化采用 Linux 运行方式 | [`vivid_web_producer.cpp`](https://github.com/SceAce/Mac-WallpaperEngine/blob/09806ee606cd7f918c38625d541f48f5fddd23e9/producer/src/renderers/web/vivid_web_producer.cpp) | macOS 主循环、helper bundle、沙箱和纹理路径需重新设计 |
+| 视频依赖 GStreamer CUDA/VA/DRM | [video CMake](https://github.com/SceAce/Mac-WallpaperEngine/blob/09806ee606cd7f918c38625d541f48f5fddd23e9/producer/src/renderers/video/CMakeLists.txt) | 替换解码与输出后端，不把这些 Linux 依赖带到 Mac |
+| 音频频谱已有特定兼容算法 | [`vivid_media_bridge.cpp`](https://github.com/SceAce/Mac-WallpaperEngine/blob/09806ee606cd7f918c38625d541f48f5fddd23e9/consumer/kde/src/qml_module/vivid_media_bridge.cpp)、[`display-helper.js`](https://github.com/SceAce/Mac-WallpaperEngine/blob/09806ee606cd7f918c38625d541f48f5fddd23e9/consumer/gnome/extension/shell/helper/display-helper.js) | 移植现有 Bluestein 与频带映射，不能直接换成常见的 Hann 窗 FFT |
 
 本机 SDK 头文件确认存在桌面窗口层级、事件观察、IOSurface 的 XPC/Mach 传递接口。当前 macOS 宿主在运行时检查 arm64、macOS 26 和 Metal 设备；这只能证明前置条件，不代表桌面行为、权限组合和 scene 运行效果已完成。
 
@@ -124,10 +124,8 @@ macos/
   Media/               音频采集、解码和媒体信息适配
   Bridges/             C ABI / Objective-C++ 边界
   Packaging/           bundle、签名、公证与依赖清单
-producer/src/renderers/
-  scene/               Linux 适配；核心共享部分按边界提取
-  web/                 Linux 适配与唯一的 JS bridge 源码
-  video/               现有 Linux 视频后端
+  WebUI/               面板与原生管道后端
+  Web/vivid_web_bridge_js.h  唯一的 JS bridge 源码
 producer/third_party/
   wallpaper-scene-renderer/  固定版本、可审计的核心依赖
 ```
@@ -145,7 +143,7 @@ producer/third_party/
 
 共享模块按实际复用提取，不先制造通用插件框架。Python 壁纸元数据逻辑与 scene 属性解析迁入规范模型前，先保存行为样本；Mac UI 读取同一份规范描述，避免 Swift、Python、C++ 各自解释属性类型。
 
-Linux 入口继续工作。提取共享模块时先接回原调用点并验证等价，再加入 Mac 调用者。暂时未迁移的旧实现必须标注替换阶段，不能变成永久的两套事实来源。
+本仓库现在只维护 macOS。原 Linux 入口已移除；保留的 scene 核心和 WebUI 必须通过 macOS 构建、面板及真实壁纸回归。第三方依赖子模块保持固定版本原样。
 
 ## 5. 状态、接口与线程模型
 
@@ -180,7 +178,7 @@ Linux 入口继续工作。提取共享模块时先接回原调用点并验证�
 
 包络包含协议版本、进程 incarnation、sessionId 和 requestId。控制消息有有界载荷和 schema 校验；结构化解码结果才进入核心。连接限定为应用 bundle 内受控服务，验证预期对端身份，不开放全局控制入口。初版只支持一种明确的 macOS 协议版本，不做未经使用的多版本协商框架。
 
-现有 Linux wire protocol 保持独立。未来若统一，必须修改 TOML 源定义并重新生成绑定；不直接手改生成文件。
+面板与原生应用使用 JSON 行管道，控制编号和配置键保持原值；Linux 二进制 wire protocol 及其生成工具已移除。管道契约见 `macos/WebUI/CONTRACT.md`。
 
 ### 5.3 线程分工
 
@@ -398,7 +396,7 @@ Swift 使用 swift-format，C/C++/Objective-C++ 使用 clang-format；新代码�
 
 CEF 使用对应版本的 macOS helper、沙箱和签名方案；现有 Linux 的 `no_sandbox = true` 不作为 Mac 版默认配置继承。独立分发不自动意味着关闭 Chromium 沙箱。任何实际需要的 entitlement 都应由签名样本验证。
 
-CI 分三层：纯算法/协议检查、macOS 构建检查、真实 GPU/桌面集成检查。没有图形会话的 runner 无法替代 Finder/Spaces 验收，必须保留物理机测试记录。修改共享算法或核心时同时运行 Linux 回归；只改 macOS UI 时不无意义重跑所有壁纸。
+CI 分三层：纯算法/协议检查、macOS 构建检查、真实 GPU/桌面集成检查。没有图形会话的 runner 无法替代 Finder/Spaces 验收，必须保留物理机测试记录。修改核心时运行 macOS scene 回归；只改 macOS UI 时不无意义重跑所有壁纸。原 Linux 基线作为历史兼容依据保留。
 
 GPL-2.0 代码及第三方许可证随发行审查；分发修改后的二进制时提供符合许可证的对应源码。原版公共 assets 和用户壁纸不默认打包。最后在没有开发依赖的干净 Mac 上验证安装、启动、公证和卸载退出行为。
 
@@ -410,7 +408,7 @@ GPL-2.0 代码及第三方许可证随发行审查；分发修改后的二进制
 | --- | --- | --- |
 | D0：设计评审（已通过） | 本方案、范围与风险 | 已确认 Apple Silicon、macOS 26+、Vivid 原 scene 核心和其余路线约束 |
 | P0：关键假设验证（进行中） | 已恢复依赖的 macOS 构建；设备能力/geometry 替代与真实粒子效果；IOSurface 共享与归还；CEF 宿主；桌面点击矩阵 | 四项关键假设有记录；普通场景与粒子/rope 均有对照；无法满足的目标回到设计评审 |
-| P1：共享边界与运行骨架 | 内容模型、布局、桥接、协议、会话状态机和受控帧池；最小 app | 契约测试通过；Linux 共享部分等价；无平台依赖反向渗入核心 |
+| P1：共享边界与运行骨架 | 内容模型、布局、桥接、协议、会话状态机和受控帧池；最小 app | 契约测试通过；核心兼容语义保持；无平台依赖反向渗入核心 |
 | P2：Scene 桌面闭环（播放链路已实现，完整验收进行中） | 项目路径、assets、属性、渲染、桌面跟随/左键、暂停、单屏生命周期 | 一组真实 scene 与 Linux 对照通过，包括复杂效果；点击符合已评审行为 |
 | P3：Web / Video / 多屏 | CEF bridge、系统解码、各屏配置、热插拔和几何切换 | WebGL/音视频/按钮/滚轮样本与视频格式矩阵通过；无错屏、坐标漂移 |
 | P4：音频与兼容完善 | 采集、频谱算法、scene 视频纹理剩余项、媒体能力、功耗优化 | 数值差分与真实音频壁纸通过；权限拒绝不破坏其他功能 |
@@ -470,7 +468,7 @@ P0 必须交付的可复核证据：
 根据后续要求，管理界面改为复用原 Vivid WebUI。应用启动 Python 标准库 HTTP 后端，
 浏览器默认访问 `http://127.0.0.1:8765`，可通过启动环境中的 `VIVID_WEBUI_PORT` 修改；
 后端通过继承的 stdin/stdout 管道请求原生协调器。
-Linux 原有 Unix socket 协议保留。原生端唯一负责配置持久化和播放状态，不另起 Linux daemon。
+原生端唯一负责配置持久化和播放状态。macOS 专用清理已移除 Linux Unix socket 协议；面板只使用继承管道。
 
 配置事务先解析项目，等待候选播放器首帧，再原子保存并替换旧窗口。候选播放阶段静音，
 避免切换时双重音频。失败保留旧选择。显示器使用稳定 UUID，采用一屏一会话。
@@ -485,3 +483,11 @@ Web 已验证可在 `RunLoopType=NSRunLoop` 的 application XPC 服务内运行 
 标准 Chromium 子进程仍使用 bundle 内 Helper app。加速 IOSurface 在 CEF 回调有效期内复制到拥有的帧池，
 等待 GPU 完成后发布；共享 scene 的帧租约和 Metal 呈现，提供 BGRA/RGBA 格式区分。
 细节见 `macos/Web/CONTRACT.md`。当前使用开发签名、关闭 Chromium 沙箱，不等同发行版安全与分发验收。
+
+## 2026-09-20：macOS 专用仓库
+
+按后续范围要求，移除 Linux daemon、桌面 consumer、Flatpak、Linux release 工作流和二进制协议工具。
+面板移至 `macos/WebUI`，唯一 JS bridge 移至 `macos/Web`；scene 仅构建 Metal/AVFoundation 适配器。
+固定第三方依赖仍位于 `producer/third_party`，避免现有子模块和 DXC 构建路径失效。
+上文 Linux 行为调查保留为来源记录，已移除文件的链接指向清理前版本；Linux 不再是本仓库的构建或验收目标。
+具体范围与验证见 [清理记录](macos-only-cleanup.zh-CN.md)。

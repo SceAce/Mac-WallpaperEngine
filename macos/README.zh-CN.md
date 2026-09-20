@@ -3,7 +3,7 @@
 [English](README.md) | [简体中文](README.zh-CN.md)
 
 面向 Apple Silicon、macOS 26+ 的开发版 Wallpaper Engine 播放器。保留 Vivid 的 WebUI 和 scene 核心，
-使用 macOS 原生桌面窗口。应用会自动启动面板后端并打开浏览器，无需单独启动 Linux daemon。
+使用 macOS 原生桌面窗口。应用会自动启动面板后端并打开浏览器，本仓库仅维护 macOS。面板源码位于 `macos/WebUI`。
 
 ## 构建
 
@@ -40,7 +40,7 @@ macos/.build/Vivid.app/Contents/MacOS/vivid-macos \
 面板可浏览、搜索、筛选和排序壁纸，按显示器选择/移除项目，编辑并保存用户属性；
 支持播放/暂停、全局及逐屏静音、音量、缩放和自动轮换。默认仅主屏播放声音，其他屏可独立取消静音。
 支持独立显示器模式，暂不提供跨屏共享渲染的复制模式。
-未接入的 GPU 选择、Linux 应用匹配规则及自动播放策略不会显示为可用设置。
+未接入的 GPU 选择、应用匹配规则及自动播放策略不会显示为可用设置。
 
 配置保存在 `~/Library/Application Support/org.sceace.vivid/config.json`，原子写入。
 测试可通过 `--config <文件>` 使用隔离配置。切换项目时先等待新播放器首帧，再替换旧窗口；
@@ -95,8 +95,8 @@ git clone --recurse-submodules https://github.com/SceAce/Mac-WallpaperEngine.git
 cd Mac-WallpaperEngine
 ```
 
-GitHub 自动生成的源码压缩包不包含子模块内容。现有 `.github/workflows/release.yml`
-只构建 Linux 包，尚未自动构建 macOS 的 `.app` 或 DMG。
+GitHub 自动生成的源码压缩包不包含子模块内容。原 Linux 发行工作流已移除，
+尚未接入自动构建 macOS `.app` 或 DMG 的发行工作流。
 
 当前生成的 `Vivid.app` 是开发包，还不能作为独立安装包直接分发。scene 可执行文件链接了
 Homebrew 动态库，MoltenVK / DXC 的运行时搜索路径也指向本机编译目录；面板依赖外部 Python。

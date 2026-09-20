@@ -1,15 +1,15 @@
 # Scene Platform Boundary
 
 The scene parser, SceneScript host, animation clock, particle simulation and render
-graph remain in the pinned Vivid renderer. Platform implementation files are
-selected by CMake, not patched during a build.
+graph remain in the Vivid renderer. CMake compiles the macOS platform adapters;
+dependency sources are not patched during a build.
 
 - Vulkan device discovery enables supported features. A material requiring an
   unavailable stage must be translated by its particle render plan or rejected
   before pipeline creation. Geometry support is not a prerequisite for image scenes.
-- Linux owns DMA-BUF/FD allocation and GStreamer decoding. macOS owns IOSurface
-  allocation and AVFoundation decoding. Neither platform's decoder headers belong
-  in the public cache interface.
+- macOS owns IOSurface allocation and AVFoundation decoding. Decoder headers
+  stay outside the public cache interface. The unused Linux DMA-BUF/GStreamer
+  implementations have been removed from this fork.
 - The macOS output consists of three RGBA8 IOSurfaces imported into Vulkan using
   `VK_EXT_metal_objects`. Vulkan completes its fence before publishing a slot.
   The consumer releases a session/generation/slot/sequence lease after its Metal
@@ -31,7 +31,7 @@ selected by CMake, not patched during a build.
   addition by floating-point rounding. Subdivision 0...510 fits the original
   geometry stage's 1024-vertex ceiling; unsupported control flow fails compilation.
 - Text uses one FreeType Pango map per thread. Asset-font registration and layout
-  share the Fontconfig backend on both platforms; the macOS CoreText default is
+  share the original Fontconfig backend; the macOS CoreText default is
   not used for scene text.
 - Color attachment contents are loaded unless the pass owner explicitly clears
   them. Blend mode alone cannot establish full pixel/channel coverage: partial

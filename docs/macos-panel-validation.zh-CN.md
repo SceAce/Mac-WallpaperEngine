@@ -1,5 +1,7 @@
 # macOS 面板与多类型播放验证（2026-09-20）
 
+> 本文记录当时的验证结果。后续已移除 Linux 入口与 socket 后端，当前范围见 [macOS 专用清理记录](macos-only-cleanup.zh-CN.md)。
+
 环境：Apple M1 Pro、macOS 26.6.2、Swift 6.1.2，开发签名，已登录图形会话。
 壁纸库为 `/Users/scemac/Pictures/Wallpapers/WallpaperEngine`；公共 assets 来自用户外置盘。
 测试期间外置盘曾掉线，重新挂载到 `disk4s2` 后完成 scene 回归；未改写素材。

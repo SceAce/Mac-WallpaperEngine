@@ -15,7 +15,7 @@ set_target_properties(VividWebService PROPERTIES BUNDLE_EXTENSION xpc MACOSX_BUN
 add_executable(VividWebHelper Helper.mm)
 foreach(target VividWebService VividWebHelper)
     target_include_directories(${target} SYSTEM PRIVATE "${CEF_ROOT}")
-    target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../producer/src/renderers/web")
+    target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(${target} PRIVATE libcef_dll_wrapper "-framework AppKit" "-framework Metal" "-framework IOSurface" "-framework CoreVideo")
     target_compile_options(${target} PRIVATE -fobjc-arc -Wall -Wextra -Werror -Wno-unused-parameter)
 endforeach()

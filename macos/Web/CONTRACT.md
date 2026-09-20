@@ -31,7 +31,7 @@ browser host. The validation run confirmed there were no remaining CEF processes
 XPC service had exited. Service idle lifetime remains managed by XPC.
 
 Project pages run at their original file URLs. The sole Vivid JS bridge is
-included from producer/src/renderers/web/vivid_web_bridge_js.h and injected by
+included from macos/Web/vivid_web_bridge_js.h and injected by
 the Chromium renderer before page scripts. User/general properties and paused
 state are replayed after navigation. Popups are denied; local project content
 must not navigate the management panel. System audio/media capture is not yet

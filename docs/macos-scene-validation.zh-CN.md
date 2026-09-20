@@ -1,5 +1,7 @@
 # macOS Scene 实现与验证记录
 
+> 本文记录当时的验证结果。后续已移除 Linux 入口与 socket 后端，当前范围见 [macOS 专用清理记录](macos-only-cleanup.zh-CN.md)。
+
 日期：2026-09-18。目标为 Apple Silicon、macOS 26+；实测 Apple M1 Pro、macOS 26.6.2，Swift 6.1.2、AppleClang 17 / CLT SDK 15.5。
 
 原 Vivid scene 核心已能在 macOS 加载真实 Workshop 项目并持续显示到桌面。此次没有引入 Kirie 或 open-wallpaper-engine，也没有在构建脚本中修改依赖源码。本文记录开发版的实测范围，不代表与 Windows Wallpaper Engine 完全一致或已经具备独立发行条件。

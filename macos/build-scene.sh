@@ -13,10 +13,11 @@ task_bundle="$task_root/.build/Vivid.app"
 mkdir -p "$task_bundle/Contents/MacOS" "$task_bundle/Contents/XPCServices"
 cp "$task_root/.build/debug/vivid-macos" "$task_bundle/Contents/MacOS/"
 cp "$task_root/Scene/App.plist" "$task_bundle/Contents/Info.plist"
+# Replace the generated resource directory so removed backend modules cannot linger.
+rm -rf "$task_bundle/Contents/Resources/webui"
 mkdir -p "$task_bundle/Contents/Resources/webui"
-cp "$task_root/../producer/src/webui/"*.py "$task_root/../producer/src/webui/"*.js \
-   "$task_root/../producer/src/webui/"*.css "$task_root/../producer/src/webui/"*.html \
-   "$task_bundle/Contents/Resources/webui/"
+cp "$task_root/WebUI/"*.py "$task_root/WebUI/"*.js \
+   "$task_root/WebUI/"*.css "$task_root/WebUI/"*.html "$task_bundle/Contents/Resources/webui/"
 cp -R "$task_root/.build/scene/VividSceneService.xpc" "$task_bundle/Contents/XPCServices/"
 ditto "$task_root/.build/web/VividWebService.xpc" "$task_bundle/Contents/XPCServices/VividWebService.xpc"
 codesign --force --sign - "$task_bundle/Contents/XPCServices/VividSceneService.xpc"

@@ -1,6 +1,3 @@
-if(BUILD_QML)
-  find_package(OpenGL REQUIRED)
-endif()
 find_package(Threads REQUIRED)
 pkg_check_modules(LZ4 REQUIRED IMPORTED_TARGET liblz4)
 pkg_check_modules(PANGOCAIRO REQUIRED IMPORTED_TARGET pangocairo)
@@ -10,12 +7,6 @@ pkg_check_modules(PANGOCAIRO REQUIRED IMPORTED_TARGET pangocairo)
 pkg_check_modules(PANGOFT2 REQUIRED IMPORTED_TARGET pangoft2)
 pkg_check_modules(FONTCONFIG REQUIRED IMPORTED_TARGET fontconfig)
 pkg_check_modules(FREETYPE2 REQUIRED IMPORTED_TARGET freetype2)
-
-option(ENABLE_RENDERDOC "Build with renderdoc api" OFF)
-
-if(ENABLE_RENDERDOC)
-  add_compile_definitions(ENABLE_RENDERDOC_API=1)
-endif()
 
 include(TestBigEndian)
 test_big_endian(ENDIAN)

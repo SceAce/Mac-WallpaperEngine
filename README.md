@@ -1,163 +1,56 @@
-# Vivid
+# Vivid for macOS
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-<p align="center">
-  <img src="producer/resources/io.github.ayasa520.Vivid.svg" alt="Vivid thumbnail" width="160">
-</p>
+Wallpaper Engine player for **Apple Silicon (M series), macOS 26+**. This fork of
+[ayasa520/Vivid](https://github.com/ayasa520/Vivid) maintains the native macOS app,
+Vivid scene compatibility core, original WebUI and CEF JavaScript bridge.
 
-Vivid is an open-source reimplementation of Wallpaper Engine for Linux.
+- Scene: original C++ renderer, MoltenVK, IOSurface and Metal.
+- Video: native AVFoundation playback and looping.
+- Web: bundled CEF with wallpaper properties and mouse interaction.
+- Panel: library browsing, per-display assignments, settings and scheduled rotation.
 
-This fork's macOS port targets Apple Silicon and macOS 26+ and now plays scene
-wallpapers through Vivid's C++ core. See the [macOS build guide](macos/README.md)
-and [verification record](docs/macos-scene-validation.zh-CN.md). The release instructions
-below describe the original Linux application.
-
-**THIS PROJECT USES VIBE CODING.**
-
-## Install a release
-
-Download files from the [GitHub Releases](https://github.com/ayasa520/Vivid/releases)
-page. Use the assets attached to a release, not the artifact ZIPs from the
-Actions page. Release assets are already unpacked into installable files.
-
-Choose `x86_64` for 64-bit Intel/AMD systems or `aarch64` for 64-bit Arm
-systems. `uname -m` prints the architecture of the current system. Each Vivid
-installation needs the Flatpak producer and one consumer matching the desktop:
-
-| Desktop | Release asset |
-| --- | --- |
-| Producer and controller | `io.github.ayasa520.Vivid-<version>-<arch>.flatpak` |
-| GNOME Shell | `vivid-consumer-gnome-<version>-<arch>.zip` |
-| KDE Plasma | `vivid-consumer-kde-<version>-<arch>.zip` |
-| Hyprland, Sway, niri, and other layer-shell compositors | `vivid-layer-shell-consumer-<version>-<arch>` |
-
-The commands below use the `1.0.6` x86_64 assets as examples. Run them from the
-directory containing the downloaded files.
-
-### Producer
-
-Install the Flatpak bundle for the current user, then start Vivid from the
-application launcher or the command line:
+## Build and run
 
 ```sh
-flatpak install --user ./io.github.ayasa520.Vivid-1.0.6-x86_64.flatpak
-flatpak run io.github.ayasa520.Vivid
+git clone --recurse-submodules https://github.com/SceAce/Mac-WallpaperEngine.git
+cd Mac-WallpaperEngine
+brew install cmake ninja pkgconf lz4 pango fontconfig freetype libffi python
+bash macos/setup-scene.sh
+bash macos/setup-web.sh
+bash macos/build-scene.sh
+open macos/.build/Vivid.app
 ```
 
-### GNOME Shell consumer
+Requires Swift 6.1+. Setup defaults to proxy `http://127.0.0.1:7897`; configure
+`VIVID_PROXY` for your environment. The panel opens at `http://127.0.0.1:8765/`.
+Choose your wallpaper library and the original Wallpaper Engine `assets` folder.
+Both may be on a local disk; standalone video wallpapers do not require assets.
 
-The release ZIP is ready for `gnome-extensions` and supports GNOME Shell 45
-through 50:
+See the [complete build, playback and login guide](macos/README.md).
+**The app remains a development bundle with external runtime dependencies,
+ad hoc signing and CEF sandboxing disabled.** Standalone distribution and
+notarization are pending. Content compatibility and test limits are recorded in
+[panel validation](docs/macos-panel-validation.zh-CN.md) and
+[scene validation](docs/macos-scene-validation.zh-CN.md).
 
-```sh
-gnome-extensions install --force ./vivid-consumer-gnome-1.0.6-x86_64.zip
-gnome-extensions enable vivid-consumer-gnome@rikka.local
-```
+## Repository layout
 
-Log out and back in if GNOME Shell has not loaded the newly installed
-extension.
+- `macos/`: native app, XPC scene/web services, WebUI, JS bridge, build scripts and tests.
+- `producer/third_party/`: scene core and six pinned dependency submodules. The
+  historical path is retained for existing submodule and DXC build directories.
+- `docs/`: architecture decisions, source provenance and macOS validation records.
 
-### KDE Plasma consumer
+Linux clients, daemon, packaging and release workflows have been removed. Use
+[upstream Vivid](https://github.com/ayasa520/Vivid) for Linux. Platform files inside
+pinned third-party libraries are retained as upstream dependencies; they do not
+add a Linux application target. See the [cleanup record](docs/macos-only-cleanup.zh-CN.md).
 
-Extract the package, install it with KPackage, then select **Vivid** in
-**Desktop and Wallpaper** settings:
+## License and attribution
 
-```sh
-vivid_kde_stage="$(mktemp -d)"
-unzip ./vivid-consumer-kde-1.0.6-x86_64.zip -d "${vivid_kde_stage}"
-kpackagetool6 --type Plasma/Wallpaper \
-  --install "${vivid_kde_stage}/dev.rikka.vivid.consumer.kde"
-```
-
-Use `--upgrade` instead of `--install` when updating an existing KDE package.
-
-### Layer-shell consumer
-
-Install the executable in the user-local binary directory:
-
-```sh
-install -Dm755 ./vivid-layer-shell-consumer-1.0.6-x86_64 \
-  "${HOME}/.local/bin/vivid-layer-shell-consumer"
-```
-
-Start the producer first, then run `vivid-layer-shell-consumer`. See the
-[layer-shell consumer guide](consumer/layer-shell/README.md) for compositor
-autostart configuration.
-
-## Build
-
-Producer build artifacts are written under `producer/.build`.
-
-### Flatpak
-
-```sh
-tools/vivid.sh flatpak prefetch
-tools/vivid.sh build flatpak
-tools/vivid.sh flatpak run-appdir
-```
-
-`tools/vivid.sh flatpak prefetch` downloads and pins the Flatpak sources first.
-After that, an offline/cached build can be run with:
-
-```sh
-VIVID_FLATPAK_DISABLE_DOWNLOAD=1 tools/vivid.sh build flatpak
-```
-
-The Flatpak manifest is rendered from
-`producer/packaging/flatpak/io.github.ayasa520.Vivid.yml` into
-`producer/.build/flatpak-manifest`. The bundle is written to
-`producer/.build/io.github.ayasa520.Vivid-1.0.0-<arch>.flatpak` by default.
-
-Set the Flatpak software version with:
-
-```sh
-VIVID_FLATPAK_APP_VERSION=1.0.0 \
-VIVID_FLATPAK_RELEASE_DATE=2026-06-18 \
-  tools/vivid.sh build flatpak
-```
-
-Useful cache locations:
-
-- `producer/.build/flatpak-builder-state`
-- `producer/.build/flatpak-builder-state/ccache`
-- `producer/.build/flatpak-native-cache/native-build`
-- `producer/.build/flatpak-repo/vivid-producer`
-
-### Direct Run
-
-```sh
-tools/vivid.sh build direct-run
-tools/vivid.sh direct-run run
-```
-
-Direct-run artifacts stay in `producer/.build/direct-run`.
-
-### Desktop consumers
-
-GNOME Shell and KDE Plasma have dedicated plugins:
-
-```sh
-tools/vivid.sh gnome build
-tools/vivid.sh kde build
-```
-
-Other Wayland compositors that speak `zwlr_layer_shell_v1` (Sway, Hyprland, labwc, river, wayfire, niri, …) use the catch-all client:
-
-```sh
-tools/vivid.sh layer-shell build
-tools/vivid.sh layer-shell run
-```
-
-See `consumer/layer-shell/README.md` and `consumer/layer-shell/examples/` for Hyprland Lua autostart / `hl.layer_rule`, Sway `exec`, and niri autostart. GNOME still needs the Shell extension; Mutter does not implement layer-shell.
-
-### Clean
-
-```sh
-tools/vivid.sh clean flatpak
-tools/vivid.sh clean direct-run
-```
-
-Credits:
-
-1. [waywallen](https://github.com/waywallen)
+[GPL-2.0](LICENSE). This fork retains Vivid's source and compatibility work,
+[scene provenance](producer/third_party/wallpaper-scene-renderer/PROVENANCE.md),
+and dependency licenses. Thanks to upstream Vivid, wallpaper-scene-renderer and
+[waywallen](https://github.com/waywallen). Wallpapers and original Wallpaper Engine
+assets are user-provided and are not redistributed.

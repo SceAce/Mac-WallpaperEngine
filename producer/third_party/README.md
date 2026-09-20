@@ -1,12 +1,11 @@
-This directory is for third-party source dependencies used by Vivid's bundled renderer modules.
-
-<!-- Documentation note: this file intentionally documents only source trees that Vivid builds
-directly. Runtime-installed shared libraries and typelibs are described in the root README. -->
+This directory contains the scene core and dependencies used by the macOS app.
+The historical `producer/third_party` path is retained to preserve submodule
+locations and existing DXC build trees. No Linux producer remains in this fork.
 
 Current layout:
 
-- `wallpaper-scene-renderer/`: Wallpaper Engine scene renderer source used by `producer/src/renderers/scene`
-  and the macOS scene service, tracked directly in this repository.
+- `wallpaper-scene-renderer/`: Wallpaper Engine scene renderer source used by the
+  macOS scene service, tracked directly in this repository.
 
 The scene source is based on upstream Vivid's
 `0986aa4e48540eb9ec75786bde88e458ff7dc422` and includes the macOS port. Its source

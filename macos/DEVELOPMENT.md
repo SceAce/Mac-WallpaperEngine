@@ -34,4 +34,6 @@ clang-format -i macos/Probes/FrameTransport/*.hpp macos/Probes/FrameTransport/*.
 Run the build and verification commands in [README.md](README.md). The desktop
 probe exercises the real Metal completion callback, including Swift's runtime
 actor checks; compile-time checks and offscreen image tests alone do not cover it.
-Run Linux compatibility checks when shared renderer behavior changes.
+This repository builds macOS only. When changing the scene core, run the native
+scene regressions and retain upstream provenance; do not prune platform code
+inside pinned dependency submodules.

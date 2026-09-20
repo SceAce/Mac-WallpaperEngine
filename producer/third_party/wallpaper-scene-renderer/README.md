@@ -1,7 +1,10 @@
 # Wallpaper Engine Scene Renderer
 
-Open source scene renderer, mostly for linux.  
-Made this for fun.
+Vivid's scene compatibility core, maintained here for the Apple Silicon macOS
+host. The original parser, scripts, particle simulation, text layout and render
+graph are retained. IOSurface and AVFoundation provide output and video decoding.
+Linux platform adapters and the unused Qt/OpenGL example hosts have been removed.
+See [provenance](PROVENANCE.md) and the [macOS build guide](../../../macos/README.md).
 
 <!-- Documentation note: this README tracks the compatibility layer used by Hanabi's native
 scene backend. Items marked as supported can still be compatibility subsets rather than a complete

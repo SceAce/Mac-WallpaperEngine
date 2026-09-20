@@ -1,9 +1,5 @@
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 
-if(BUILD_QML)
-    add_subdirectory(glad)
-endif()
-
 add_library (eigen INTERFACE)
 add_library (Eigen3::Eigen ALIAS eigen)
 target_include_directories(eigen INTERFACE Eigen)

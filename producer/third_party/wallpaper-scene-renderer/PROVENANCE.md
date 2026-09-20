@@ -9,7 +9,7 @@ its macOS adaptations. It is not a separate scene submodule.
 - License: [GPL-2.0](LICENSE); upstream notices and bundled library notices are retained.
 
 The migration snapshot was committed locally before importing its source into the
-application repository. The 293 imported files match that snapshot byte for byte;
+application repository. At import, the 293 files matched that snapshot byte for byte;
 its nested `.gitmodules` was replaced by dependency entries in the root repository.
 The snapshot ID records provenance and is not a commit that a fresh clone needs to
 fetch from the upstream scene repository.
@@ -24,3 +24,8 @@ IOSurface output and rope geometry translation, and corrects font selection,
 animation-free skeleton loading and color attachment preservation. No source
 patches are applied during builds. Implementation and verification details are
 recorded in [the macOS scene validation report](../../../docs/macos-scene-validation.zh-CN.md).
+
+The macOS-only cleanup removes the Linux texture/video adapters, Qt/OpenGL example
+hosts and their unused GL loader. The six pinned dependency submodules and the
+scene algorithms retain their sources and paths. See the
+[cleanup record](../../../docs/macos-only-cleanup.zh-CN.md).

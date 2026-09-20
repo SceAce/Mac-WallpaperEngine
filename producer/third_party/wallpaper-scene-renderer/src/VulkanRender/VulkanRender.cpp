@@ -45,10 +45,6 @@
 #include <utility>
 #include <vector>
 
-#if ENABLE_RENDERDOC_API
-#    include "RenderDoc.h"
-#endif
-
 using namespace wallpaper::vulkan;
 
 constexpr uint64_t vk_wait_time { 10u * 1000u * 1000000u };
@@ -476,9 +472,6 @@ bool VulkanRender::Impl::initRes() {
     }
     if (! CreateRenderingResource(m_rendering_resources)) return false;
 
-#if ENABLE_RENDERDOC_API
-    load_renderdoc_api();
-#endif
     return true;
 }
 
@@ -652,25 +645,19 @@ void VulkanRender::Impl::drawFrame(Scene& scene) {
     if (m_device_faulted) return;
     if (! (m_inited && m_pass_loaded)) return;
     // The QuickJS host records getVideoTexture().play()/pause() decisions on Scene before the
-    // renderer polls GStreamer. Applying them here keeps hidden authored videos from decoding
-    // while prepared passes can still reuse the last uploaded frame when they are invisible.
+    // renderer polls the video decoder. Applying them here keeps hidden authored videos from
+    // decoding while prepared passes can still reuse the last uploaded frame when they are invisible.
     m_device->video_tex_cache().ApplyPlaybackStates(scene.videoTexturePaused,
                                                     scene.videoTextureStopped,
                                                     scene.videoTextureRates);
     // setCurrentTime() requests are one-shot decoder commands, so the video cache consumes and
-    // removes only the requests whose concrete GStreamer pipeline already exists.
+    // removes only the requests whose concrete video decoder already exists.
     m_device->video_tex_cache().ApplySeekRequests(scene.videoTextureSeekRequests);
     m_device->video_tex_cache().Poll();
     m_device->video_tex_cache().PublishRuntimeStates(
         scene.videoTextureRuntimeStates, scene.videoTextureRuntimeStateRequests);
     processDeferredGraphPreparation(scene);
     m_rendering_resources.scene = &scene;
-
-#if ENABLE_RENDERDOC_API
-    if (rdoc_api)
-        rdoc_api->StartFrameCapture(
-            RENDERDOC_DEVICEPOINTER_FROM_VKINSTANCE((VkInstance)m_instance.inst()), NULL);
-#endif
 
     if (m_instance.offscreen()) {
         drawFrameOffscreen(scene);
@@ -679,12 +666,6 @@ void VulkanRender::Impl::drawFrame(Scene& scene) {
     }
 
     if (m_redraw_cb) m_redraw_cb();
-
-#if ENABLE_RENDERDOC_API
-    if (rdoc_api)
-        rdoc_api->EndFrameCapture(
-            RENDERDOC_DEVICEPOINTER_FROM_VKINSTANCE((VkInstance)m_instance.inst()), NULL);
-#endif
 }
 
 void VulkanRender::Impl::setPaused(bool paused) {

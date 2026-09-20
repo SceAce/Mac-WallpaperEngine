@@ -3,8 +3,8 @@
 [English](README.md) | [简体中文](README.zh-CN.md)
 
 Development Wallpaper Engine player for Apple Silicon, macOS 26+, Swift 6.1+.
-The app starts Vivid's existing WebUI backend, opens the panel and owns native
-per-display playback. No Linux daemon is required.
+The app starts the WebUI backend in `macos/WebUI`, opens the panel and owns native
+per-display playback. This fork maintains macOS only.
 
 ## Build and launch
 
@@ -79,9 +79,9 @@ git clone --recurse-submodules https://github.com/SceAce/Mac-WallpaperEngine.git
 cd Mac-WallpaperEngine
 ```
 
-GitHub's generated source archives do not contain submodule contents. The existing
-`.github/workflows/release.yml` builds Linux packages only; it does not produce a
-macOS app or DMG.
+GitHub's generated source archives do not contain submodule contents. The inherited
+Linux release workflow has been removed; automated macOS release packaging is
+not yet implemented.
 
 The generated `Vivid.app` is a development bundle, not yet a standalone download.
 The scene executable links Homebrew libraries and has absolute runtime search
