@@ -51,10 +51,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.webUI = webUI
                 try webUI.start()
             }
-            Task {
+            let launchOptions = options
+            Task { @MainActor [weak self, coordinator, launchOptions] in
                 await coordinator.start()
-                if let duration = options.probeDuration {
-                    probeTimer = Timer.scheduledTimer(withTimeInterval: duration, repeats: false) {
+                if let duration = launchOptions.probeDuration {
+                    guard let self else { return }
+                    self.probeTimer = Timer.scheduledTimer(withTimeInterval: duration, repeats: false) {
                         [weak self] _ in
                         Task { @MainActor [weak self] in
                             guard let self else { return }

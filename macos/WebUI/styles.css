@@ -1657,6 +1657,11 @@ pre {
   opacity: 0.72;
 }
 
+.display-monitor.is-failed {
+  border-color: var(--danger);
+  box-shadow: var(--shadow-3), 0 0 0 3px var(--danger-20);
+}
+
 .display-monitor-preview {
   position: absolute;
   inset: 0;
@@ -1710,6 +1715,11 @@ pre {
 .display-monitor.is-primary .display-monitor-badge {
   background: var(--accent);
   box-shadow: 0 6px 18px var(--accent-40);
+}
+
+.display-monitor.is-failed .display-monitor-badge {
+  background: var(--danger);
+  box-shadow: 0 6px 18px var(--danger-20);
 }
 
 .display-monitor-menu {

@@ -2460,8 +2460,11 @@ function createDisplayMonitor(output, outputs, bounds, index) {
   button.classList.toggle('is-selected', isClone || key === selectedKey);
   button.classList.toggle('is-primary', isPrimary);
   button.classList.toggle('is-muted', !isClone && perOutputMuted(key));
+  const failure = `${output?.failure ?? ''}`.trim();
+  button.classList.toggle('is-failed', Boolean(failure));
   button.style.cssText = monitorLayoutStyle(output, bounds);
-  button.title = outputDisplayLabel(output);
+  button.title = failure ? `${outputDisplayLabel(output)}: ${failure}` : outputDisplayLabel(output);
+  button.setAttribute('aria-label', button.title);
   button.addEventListener('click', () => selectDisplayForWallpaper(key));
 
   const previewSource = projectPreviewImageSource(displayPreviewProjectForOutput(output, outputs));

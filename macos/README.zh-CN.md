@@ -148,6 +148,10 @@ macos/.build/VividSceneTest.app/Contents/MacOS/vivid-macos \
 启动应用，再以它输出的地址运行 `python3 macos/test-panel.py <地址> <壁纸库> --videos`。
 测试会切换壁纸和修改该隔离配置，需要已登录的图形会话。
 
+每块显示器独立启动和恢复；某块显示器的壁纸路径失效或首帧失败不会阻塞其他显示器。
+显示器拓扑、窗口重建和每屏失败原因会写入 macOS 统一日志，可用
+`log show --predicate 'subsystem == "org.sceace.vivid"'` 查询。
+
 检查结果和限制见 [面板与多类型验证记录](../docs/macos-panel-validation.zh-CN.md) 及
 [原 scene 验证记录](../docs/macos-scene-validation.zh-CN.md)。开发遵循 [开发规范](DEVELOPMENT.md)、
 [scene 契约](Scene/CONTRACT.md) 和 [CEF 契约](Web/CONTRACT.md)。scene 核心由本仓库直接管理，外部库保留固定版本子模块。

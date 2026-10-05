@@ -75,7 +75,7 @@ final class WallpaperWindowController: NSWindowController {
         window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)) - 1)
         window.isReleasedWhenClosed = false
         window.hidesOnDeactivate = false
-        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         window.ignoresMouseEvents = true
         window.contentView = wallpaperView
         super.init(window: window)
@@ -92,14 +92,14 @@ final class WallpaperWindowController: NSWindowController {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("Use init(screen:...)") }
 
-    func start(behind old: WallpaperWindowController?) async throws {
+    func start(behind old: WallpaperWindowController?, waitForFirstFrame: Bool = true) async throws {
         if let oldWindow = old?.window {
             window?.order(.below, relativeTo: oldWindow.windowNumber)
         } else {
             window?.orderFrontRegardless()
         }
         setPaused(false)
-        if ready { return }
+        if ready || !waitForFirstFrame { return }
         try await withCheckedThrowingContinuation { continuation in
             readiness = continuation
             readinessTimeout = Task { [weak self] in
@@ -132,7 +132,9 @@ final class WallpaperWindowController: NSWindowController {
     }
 
     func update(screen: NSScreen) {
-        window?.setFrame(screen.frame, display: false)
+        guard let window else { return }
+        window.setFrame(screen.frame, display: true)
+        window.setFrameOrigin(screen.frame.origin)
         if let metalView = wallpaperView as? MTKView {
             metalView.drawableSize = CGSize(
                 width: screen.frame.width * screen.backingScaleFactor,

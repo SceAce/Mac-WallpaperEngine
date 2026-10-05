@@ -1,5 +1,7 @@
 import AppKit
+import CoreGraphics
 import VividMacOSCore
+import os
 
 @MainActor
 final class WallpaperCoordinator {
@@ -21,6 +23,8 @@ final class WallpaperCoordinator {
     private var stopped = false
     private var rotation: Timer?
     private var diagnostic: WallpaperSource?
+    private var screenErrors: [String: String] = [:]
+    private let displayLogger = Logger(subsystem: "org.sceace.vivid", category: "display")
     var paused: Bool { !(config["playing"] as? Bool ?? true) }
 
     init(options: LaunchOptions, onFailure: @escaping (Error) -> Void) throws {
@@ -31,7 +35,9 @@ final class WallpaperCoordinator {
             appropriateFor: nil, create: true)
         configURL = options.configURL ?? support.appendingPathComponent("org.sceace.vivid/config.json")
         config = Self.defaults()
-        if options.probeDuration == nil, FileManager.default.fileExists(atPath: configURL.path) {
+        if options.probeDuration == nil || options.configURL != nil,
+            FileManager.default.fileExists(atPath: configURL.path)
+        {
             guard
                 let stored = try JSONSerialization.jsonObject(with: Data(contentsOf: configURL))
                     as? [String: Any]
@@ -55,6 +61,7 @@ final class WallpaperCoordinator {
                 config["per-output-projects"] = [String: Any]()
             }
         }
+        logScreens(NSScreen.screens, phase: "initialized")
     }
 
     static func defaults() -> [String: Any] {
@@ -93,11 +100,17 @@ final class WallpaperCoordinator {
         stopped = true
         rotation?.invalidate()
         rotation = nil
-        observers.forEach(NotificationCenter.default.removeObserver)
+        for observer in observers {
+            NotificationCenter.default.removeObserver(observer)
+        }
         observers.removeAll()
-        pendingControllers.forEach { $0.close() }
+        for controller in pendingControllers {
+            controller.close()
+        }
         pendingControllers.removeAll()
-        controllers.values.forEach { $0.close() }
+        for controller in controllers.values {
+            controller.close()
+        }
         controllers.removeAll()
     }
 
@@ -106,10 +119,30 @@ final class WallpaperCoordinator {
         onFailure(error)
     }
 
+    private func record(_ error: Error, displayKey: String) {
+        let message = error.localizedDescription
+        screenErrors[displayKey] = message
+        lastError = "Display \(displayKey): \(message)"
+        displayLogger.error("Display \(displayKey, privacy: .public) failed: \(message, privacy: .public)")
+        onFailure(ProjectError("Display \(displayKey): \(message)"))
+    }
+
+    private func logScreens(_ screens: [NSScreen], phase: String) {
+        let description = screens.map { screen in
+            let frame = screen.frame
+            return
+                "\(screen.displayKey)@\(Int(frame.minX)),\(Int(frame.minY)) \(Int(frame.width))x\(Int(frame.height)) scale=\(screen.backingScaleFactor)"
+        }.joined(separator: "; ")
+        displayLogger.info(
+            "\(phase, privacy: .public): \(screens.count) display(s) [\(description, privacy: .public)]")
+    }
+
     func snapshot() -> [String: Any] {
-        let primary = NSScreen.screens.first?.displayKey ?? ""
-        let outputs: [[String: Any]] = NSScreen.screens.enumerated().map { index, screen in
+        let screens = NSScreen.screens
+        let primary = primaryDisplay(in: screens)?.displayKey ?? ""
+        let outputs: [[String: Any]] = screens.enumerated().map { index, screen in
             let key = screen.displayKey
+            let failure = screenErrors[key] ?? controllers[key]?.failureMessage
             var output: [String: Any] = [
                 "displayKey": key, "displayName": screen.localizedName, "primary": key == primary,
                 "monitorIndex": index, "consumerOutputId": index + 1,
@@ -118,10 +151,11 @@ final class WallpaperCoordinator {
                 "physicalWidth": screen.frame.width * screen.backingScaleFactor,
                 "physicalHeight": screen.frame.height * screen.backingScaleFactor,
                 "status": controllers[key] == nil
-                    ? "stopped"
-                    : controllers[key]?.failureMessage != nil ? "failed" : paused ? "paused" : "playing",
+                    ? (failure == nil ? "stopped" : "failed")
+                    : failure != nil ? "failed" : paused ? "paused" : "playing",
                 "completedFrames": controllers[key]?.completedFrames ?? 0,
             ]
+            if let failure { output["failure"] = failure }
             if let time = controllers[key]?.playbackTime, time.isFinite { output["playbackTime"] = time }
             return output
         }
@@ -153,12 +187,12 @@ final class WallpaperCoordinator {
         var next = patch["reset-defaults"] as? Bool == true ? Self.defaults() : config
         for (key, value) in patch where key != "reset-defaults" { next[key] = value }
         try validate(next, patch: patch)
-        let repairsStoragePaths =
-            patch["change-wallpaper-directory-path"] != nil || patch["assets-path"] != nil
         let screens = NSScreen.screens
+        logScreens(screens, phase: "apply")
         let keys = Set(screens.map(\.displayKey))
+        let primary = primaryDisplay(in: screens)?.displayKey ?? screens.first?.displayKey ?? ""
         for key in ["primary-display-key", "current-config-display-key"] {
-            if !keys.contains(next[key] as? String ?? "") { next[key] = screens.first?.displayKey ?? "" }
+            if !keys.contains(next[key] as? String ?? "") { next[key] = primary }
         }
         var entries = next["per-output-projects"] as? [String: [String: Any]] ?? [:]
         for screen in screens
@@ -172,6 +206,7 @@ final class WallpaperCoordinator {
         var settingsByKey: [String: PlaybackSettings] = [:]
         var requested = Set<String>()
         var retainedAssignmentError: Error?
+        var errorsByDisplay: [String: Error] = [:]
         do {
             for screen in screens {
                 let key = screen.displayKey
@@ -191,8 +226,9 @@ final class WallpaperCoordinator {
                             URL(fileURLWithPath: path),
                             overrides: JSONSerialization.data(withJSONObject: overrides))
                     } catch {
-                        guard repairsStoragePaths, currentPath == path else { throw error }
+                        guard currentPath == path else { throw error }
                         retainedAssignmentError = retainedAssignmentError ?? error
+                        errorsByDisplay[key] = error
                         if let existing = controllers[key] {
                             settingsByKey[key] = PlaybackSettings(
                                 muted: (next["mute"] as? Bool ?? false)
@@ -228,18 +264,23 @@ final class WallpaperCoordinator {
                     candidate = try WallpaperWindowController(
                         screen: screen, source: source, project: project,
                         assetsURL: assets, settings: stagingSettings
-                    ) { [weak self] error in self?.record(error) }
+                    ) { [weak self] error in self?.record(error, displayKey: key) }
                     pendingControllers.append(candidate)
                     do {
-                        try await candidate.start(behind: controllers[key])
+                        let old = controllers[key]
+                        try await candidate.start(
+                            behind: old,
+                            waitForFirstFrame: old?.failureMessage == nil && old != nil
+                        )
                     } catch {
                         candidate.close()
                         pendingControllers.removeAll { $0 === candidate }
                         throw error
                     }
                 } catch {
-                    guard repairsStoragePaths, currentPath == path else { throw error }
+                    guard currentPath == path else { throw error }
                     retainedAssignmentError = retainedAssignmentError ?? error
+                    errorsByDisplay[key] = error
                     continue
                 }
                 guard !stopped else { throw CancellationError() }
@@ -256,7 +297,9 @@ final class WallpaperCoordinator {
                 try encoded.write(to: configURL, options: .atomic)
             }
         } catch {
-            pendingControllers.forEach { $0.close() }
+            for controller in pendingControllers {
+                controller.close()
+            }
             pendingControllers.removeAll()
             lastError = error.localizedDescription
             throw error
@@ -266,7 +309,20 @@ final class WallpaperCoordinator {
             || (config["change-wallpaper-interval"] as? Double)
                 != (next["change-wallpaper-interval"] as? Double)
         config = next
-        lastError = retainedAssignmentError?.localizedDescription
+        for screen in screens {
+            let key = screen.displayKey
+            if let error = errorsByDisplay[key] {
+                screenErrors[key] = error.localizedDescription
+                displayLogger.error(
+                    "Display \(key, privacy: .public) assignment retained: \(error.localizedDescription, privacy: .public)"
+                )
+            } else if replacements[key] != nil || controllers[key] != nil {
+                screenErrors.removeValue(forKey: key)
+            }
+        }
+        lastError = retainedAssignmentError.map {
+            "\(errorsByDisplay.count) display assignment(s) failed: \($0.localizedDescription)"
+        }
         for (key, replacement) in replacements {
             controllers.removeValue(forKey: key)?.close()
             controllers[key] = replacement
@@ -362,6 +418,10 @@ final class WallpaperCoordinator {
         } catch { record(error) }
     }
 
+    private func primaryDisplay(in screens: [NSScreen]) -> NSScreen? {
+        screens.first(where: { $0.displayID == CGMainDisplayID() }) ?? screens.first
+    }
+
     func validateProbe() -> Bool {
         !controllers.isEmpty
             && controllers.values.allSatisfy { controller in
@@ -378,10 +438,18 @@ final class WallpaperCoordinator {
 }
 
 extension NSScreen {
+    var displayID: CGDirectDisplayID? {
+        (deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber).map(\.uint32Value)
+    }
+
     var displayKey: String {
-        guard let number = deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
-            let uuid = CGDisplayCreateUUIDFromDisplayID(number.uint32Value)?.takeRetainedValue()
-        else { return localizedName }
-        return CFUUIDCreateString(nil, uuid) as String
+        guard let displayID else { return "display-unknown-\(localizedName)" }
+        if let uuid = CGDisplayCreateUUIDFromDisplayID(displayID)?.takeRetainedValue() {
+            return CFUUIDCreateString(nil, uuid) as String
+        }
+        // Virtual, AirPlay and some DisplayLink outputs do not expose a UUID.
+        // The numeric display ID is still unique among live outputs and avoids
+        // collapsing two same-named screens into one controller/config entry.
+        return "display-\(displayID)"
     }
 }

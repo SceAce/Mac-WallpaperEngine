@@ -35,9 +35,12 @@ selects an isolated configuration. Double-clicking the app restores saved wallpa
 
 The panel supports catalog search/filter/sort, per-display selection/removal and
 mute, user properties, pause/resume, volume, fit and scheduled rotation. Displays
-render independently; shared clone rendering and unimplemented platform policies
-are not exposed. A replacement waits for its first frame before replacing the old
-wallpaper. A failed selection reports an error while keeping the previous playback.
+render independently; a failed or offline assignment on one display does not
+prevent the other displays from starting. Shared clone rendering and unimplemented
+platform policies are not exposed. A replacement waits for its first frame before
+replacing the old wallpaper. A failed selection reports an error while keeping the
+previous playback. Display topology and per-display failures are available in the
+`org.sceace.vivid` unified log.
 
 ## Content
 
