@@ -2,6 +2,7 @@
 """Integration checks against a running development app with an isolated --config."""
 import argparse
 import json
+import os
 import pathlib
 import time
 import tempfile
@@ -59,6 +60,28 @@ for path in [args.library / '3265572285', args.library / 'missing-video']:
     select(path, error=True)
     assert state()['global'] == before
     assert state()['outputs'][0]['status'] == 'playing'
+# A stale assignment must not make the saved library/assets paths impossible to repair.
+with tempfile.TemporaryDirectory(prefix='vivid-offline-video-', dir=args.library.parent) as temporary:
+    transient = pathlib.Path(temporary)
+    manifest = json.loads((video / 'project.json').read_text())
+    entry = pathlib.Path(manifest['file'])
+    (transient / entry).parent.mkdir(parents=True, exist_ok=True)
+    os.link(video / entry, transient / entry)
+    (transient / 'project.json').write_text(json.dumps(manifest))
+    select(transient)
+    time.sleep(0.5)
+saved_paths = state()['global']
+replacement_library = str(args.library.parent / 'replacement-library')
+replacement_assets = str(args.library.parent / 'replacement-assets')
+request('/api/config', {'change-wallpaper-directory-path': replacement_library})
+assert state()['global']['change-wallpaper-directory-path'] == replacement_library
+request('/api/config', {'assets-path': replacement_assets})
+assert state()['global']['assets-path'] == replacement_assets
+request('/api/config', {
+    'change-wallpaper-directory-path': saved_paths['change-wallpaper-directory-path'],
+    'assets-path': saved_paths['assets-path'],
+})
+select(video)
 # Exercise asynchronous decoder failure, not just preflight path validation.
 with tempfile.TemporaryDirectory(prefix='vivid-invalid-video-') as temporary:
     broken = pathlib.Path(temporary)

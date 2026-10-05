@@ -1100,10 +1100,13 @@ const allowedMarkupAttributes = {
 
 async function requestJson(path, options = {}) {
   const mutation = options.method === 'POST';
+  const preserveGlobal = options.preserveGlobal === true;
+  const fetchOptions = {...options};
+  delete fetchOptions.preserveGlobal;
   if (mutation) app.pendingMutations = (app.pendingMutations ?? 0) + 1;
   try {
     const response = await fetch(path, {
-      ...options,
+      ...fetchOptions,
       headers: {'Content-Type': 'application/json', ...(options.headers ?? {})},
     });
     const payload = await response.json();
@@ -1112,7 +1115,10 @@ async function requestJson(path, options = {}) {
     if (payload.control?.opcode === 12 || payload.control?.payload?.ok === false)
       throw new Error(payload.control.payload.message ?? 'Wallpaper control failed');
     if (payload.control?.payload?.global) {
-      app.state = payload.control.payload;
+      const state = payload.control.payload;
+      app.state = preserveGlobal
+        ? {...state, global: {...state.global, ...app.global}}
+        : state;
       app.global = app.state.global;
     }
     return payload;
@@ -1753,13 +1759,31 @@ async function sendConfigPatch(patch, afterSave = null) {
   try {
     await requestJson('/api/config', {
       method: 'POST',
+      preserveGlobal: true,
       body: JSON.stringify(patch),
     });
     setLocalizedStatus('status.saved', 'ok');
     afterSave?.();
   } catch (error) {
-    app.global = previous;
-    populateSettings();
+    const revertedKeys = [];
+    for (const key of Object.keys(patch)) {
+      // Do not roll back a newer edit made while this request was in flight.
+      if (JSON.stringify(app.global[key]) !== JSON.stringify(patch[key]))
+        continue;
+      if (Object.prototype.hasOwnProperty.call(previous, key))
+        app.global[key] = previous[key];
+      else
+        delete app.global[key];
+      revertedKeys.push(key);
+    }
+    for (const key of revertedKeys) {
+      const definition = SETTINGS.find(item => item.key === key);
+      if (definition)
+        applySettingControlValue(definition, app.global[key]);
+    }
+    if (revertedKeys.some(key => GFX_QUALITY_BUNDLE_KEYS.includes(key)))
+      syncGfxQualityControl();
+    updateStateOutput();
     renderDisplayModal();
     setStatus(error.message, 'error');
   }
@@ -3480,11 +3504,6 @@ async function refreshProjects() {
       app.global = app.state.global ?? app.global;
     }
     app.projects = prepareProjects(response.projects ?? []);
-    app.global['change-wallpaper-directory-path'] = response.libraryPath ?? '';
-    applySettingControlValue(
-      SETTINGS.find(item => item.key === 'change-wallpaper-directory-path'),
-      app.global['change-wallpaper-directory-path'],
-    );
     syncSelectedProjectFromState();
     syncBrowserControlsFromState();
     updateStateOutput();

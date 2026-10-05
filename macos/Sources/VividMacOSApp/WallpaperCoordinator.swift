@@ -138,7 +138,8 @@ final class WallpaperCoordinator {
     }
 
     /// Stage renderers, persist atomically, then commit the screen assignments.
-    /// A failed stage leaves both the old windows and persisted configuration intact.
+    /// A failed new assignment leaves both the old windows and persisted configuration intact.
+    /// Unchanged assignments that have gone offline are retained so their global paths can be repaired.
     func apply(_ patch: [String: Any], persist: Bool = true) async throws {
         guard !stopped, !applying else { throw ProjectError("Another wallpaper change is in progress.") }
         applying = true
@@ -152,6 +153,8 @@ final class WallpaperCoordinator {
         var next = patch["reset-defaults"] as? Bool == true ? Self.defaults() : config
         for (key, value) in patch where key != "reset-defaults" { next[key] = value }
         try validate(next, patch: patch)
+        let repairsStoragePaths =
+            patch["change-wallpaper-directory-path"] != nil || patch["assets-path"] != nil
         let screens = NSScreen.screens
         let keys = Set(screens.map(\.displayKey))
         for key in ["primary-display-key", "current-config-display-key"] {
@@ -164,9 +167,11 @@ final class WallpaperCoordinator {
         }
         next["per-output-projects"] = entries
         let assets = (next["assets-path"] as? String).flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
+        let currentEntries = config["per-output-projects"] as? [String: [String: Any]] ?? [:]
         var replacements: [String: WallpaperWindowController] = [:]
         var settingsByKey: [String: PlaybackSettings] = [:]
         var requested = Set<String>()
+        var retainedAssignmentError: Error?
         do {
             for screen in screens {
                 let key = screen.displayKey
@@ -174,15 +179,31 @@ final class WallpaperCoordinator {
                 let path = entry["project-path"] as? String ?? ""
                 guard !path.isEmpty || diagnostic != nil else { continue }
                 requested.insert(key)
+                let currentPath = currentEntries[key]?["project-path"] as? String ?? ""
                 let project: WallpaperProject?
                 let source: WallpaperSource
                 if !path.isEmpty {
                     let saved = entry["saved-projects"] as? [String: [String: Any]] ?? [:]
                     let overrides = saved[path]?["user-properties"] as? [String: Any] ?? [:]
-                    project = try WallpaperProject.load(
-                        URL(fileURLWithPath: path),
-                        overrides: JSONSerialization.data(withJSONObject: overrides))
                     source = .project(URL(fileURLWithPath: path))
+                    do {
+                        project = try WallpaperProject.load(
+                            URL(fileURLWithPath: path),
+                            overrides: JSONSerialization.data(withJSONObject: overrides))
+                    } catch {
+                        guard repairsStoragePaths, currentPath == path else { throw error }
+                        retainedAssignmentError = retainedAssignmentError ?? error
+                        if let existing = controllers[key] {
+                            settingsByKey[key] = PlaybackSettings(
+                                muted: (next["mute"] as? Bool ?? false)
+                                    || (entry["mute"] as? Bool ?? false),
+                                volume: (next["volume"] as? Double ?? 100) / 100,
+                                fit: next["content-fit"] as? Int ?? 1,
+                                fps: next["scene-fps"] as? Int ?? 30,
+                                properties: existing.project?.properties ?? Data("{}".utf8))
+                        }
+                        continue
+                    }
                 } else {
                     project = nil
                     source = diagnostic!
@@ -200,14 +221,27 @@ final class WallpaperCoordinator {
                 {
                     continue
                 }
-                var stagingSettings = settings
-                stagingSettings.muted = true
-                let candidate = try WallpaperWindowController(
-                    screen: screen, source: source, project: project,
-                    assetsURL: assets, settings: stagingSettings
-                ) { [weak self] error in self?.record(error) }
-                pendingControllers.append(candidate)
-                try await candidate.start(behind: controllers[key])
+                let candidate: WallpaperWindowController
+                do {
+                    var stagingSettings = settings
+                    stagingSettings.muted = true
+                    candidate = try WallpaperWindowController(
+                        screen: screen, source: source, project: project,
+                        assetsURL: assets, settings: stagingSettings
+                    ) { [weak self] error in self?.record(error) }
+                    pendingControllers.append(candidate)
+                    do {
+                        try await candidate.start(behind: controllers[key])
+                    } catch {
+                        candidate.close()
+                        pendingControllers.removeAll { $0 === candidate }
+                        throw error
+                    }
+                } catch {
+                    guard repairsStoragePaths, currentPath == path else { throw error }
+                    retainedAssignmentError = retainedAssignmentError ?? error
+                    continue
+                }
                 guard !stopped else { throw CancellationError() }
                 replacements[key] = candidate
             }
@@ -232,7 +266,7 @@ final class WallpaperCoordinator {
             || (config["change-wallpaper-interval"] as? Double)
                 != (next["change-wallpaper-interval"] as? Double)
         config = next
-        lastError = nil
+        lastError = retainedAssignmentError?.localizedDescription
         for (key, replacement) in replacements {
             controllers.removeValue(forKey: key)?.close()
             controllers[key] = replacement
