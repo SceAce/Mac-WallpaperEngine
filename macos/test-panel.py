@@ -40,7 +40,11 @@ def select(path, error=False):
     return request('/api/wallpaper/select', {'projectPath': str(path)}, error=error)
 
 
-projects = request('/api/projects')['projects']
+catalog = request('/api/projects')
+projects = catalog['projects']
+roots = catalog['roots']
+for index, root in enumerate(roots):
+    assert all(not os.path.samefile(root, previous) for previous in roots[:index]), roots
 assert len(projects) >= 54
 video = args.library / '2519042412'
 select(video)

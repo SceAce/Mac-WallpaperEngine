@@ -5,6 +5,7 @@ import json
 import mimetypes
 import os
 import pathlib
+import stat
 import sys
 import threading
 import time
@@ -251,6 +252,16 @@ def is_dir(path):
     return bool(path) and pathlib.Path(path).is_dir()
 
 
+def directory_identity(path):
+    try:
+        metadata = pathlib.Path(path).stat()
+    except OSError:
+        return None
+    if not stat.S_ISDIR(metadata.st_mode):
+        return None
+    return metadata.st_dev, metadata.st_ino
+
+
 def has_wallpaper_engine_install(steam_library_path):
     if not steam_library_path:
         return False
@@ -303,10 +314,10 @@ def wallpaper_engine_project_roots(library_path):
             resolved = candidate.resolve(strict=False)
         except OSError:
             resolved = candidate.absolute()
-        key = str(resolved)
-        if key not in seen and resolved.is_dir():
-            roots.append(key)
-            seen.add(key)
+        identity = directory_identity(resolved)
+        if identity is not None and identity not in seen:
+            roots.append(str(resolved))
+            seen.add(identity)
     return roots
 
 
@@ -587,12 +598,13 @@ def list_projects(library_path):
         except OSError:
             continue
         for child in children:
-            if not child.is_dir():
+            identity = directory_identity(child)
+            if identity is None or identity in seen:
                 continue
             project = load_project(str(child))
-            if not project or project["path"] in seen:
+            if not project:
                 continue
-            seen.add(project["path"])
+            seen.add(identity)
             projects.append(project)
     return sorted(projects, key=lambda item: item["path"])
 
